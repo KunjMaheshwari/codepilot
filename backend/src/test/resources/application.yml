@@ -1,0 +1,11 @@
+spring:
+  profiles:
+    active: test
+  security:
+    oauth2:
+      client:
+        registration:
+          github:
+            client-id: test-client-id
+            client-secret: test-client-secret
+            scope: user:email,repo

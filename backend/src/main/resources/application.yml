@@ -1,0 +1,36 @@
+spring:
+  application:
+    name: codepilot
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/codepilot}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        format_sql: true
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration
+  security:
+    oauth2:
+      client:
+        registration:
+          github:
+            client-id: ${GITHUB_CLIENT_ID:change-me}
+            client-secret: ${GITHUB_CLIENT_SECRET:change-me}
+            scope: user:email,repo
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+codepilot:
+  encryption:
+    key: ${ENCRYPTION_KEY:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
