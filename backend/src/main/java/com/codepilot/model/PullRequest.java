@@ -46,6 +46,22 @@ public class PullRequest {
     @Column(nullable = false, length = 50)
     private String status;
 
+    @Column(length = 255)
+    private String baseBranch;
+
+    @Column(length = 255)
+    private String headBranch;
+
+    @Column(length = 64)
+    private String baseSha;
+
+    @Column(length = 64)
+    private String headSha;
+
+    private Integer additions;
+    private Integer deletions;
+    private Integer changedFiles;
+
     @CreationTimestamp
     @Column(nullable = false, updatable = false)
     private ZonedDateTime createdAt;

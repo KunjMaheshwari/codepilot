@@ -35,4 +35,13 @@ public class PullRequestService {
                 .orElseThrow(() -> new ResourceNotFoundException("PullRequest", "id", id));
         return new PullRequestDto(pullRequest);
     }
+
+    @Transactional(readOnly = true)
+    public PageDto<PullRequestDto> getPullRequestsForRepository(UUID repositoryId, Pageable pageable) {
+        User user = repositoryService.getAuthenticatedUser();
+        repositoryService.getOwnedRepository(repositoryId);
+        Page<PullRequest> pullRequests = pullRequestRepository
+                .findByRepositoryIdAndRepositoryOwnerId(repositoryId, user.getId(), pageable);
+        return new PageDto<>(pullRequests.map(PullRequestDto::new));
+    }
 }

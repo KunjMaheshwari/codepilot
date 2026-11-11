@@ -5,6 +5,8 @@ import com.codepilot.model.PullRequest;
 import com.codepilot.model.Repository;
 import com.codepilot.model.User;
 import com.codepilot.repository.ConnectedGitHubAccountRepository;
+import com.codepilot.repository.RepositoryRepository;
+import com.codepilot.repository.PullRequestRepository;
 import com.codepilot.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -14,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.time.ZonedDateTime;
 
 @Service
 @Slf4j
@@ -24,6 +27,8 @@ public class GitHubIntegrationService {
     private final ConnectedGitHubAccountRepository connectedGitHubAccountRepository;
     private final UserRepository userRepository;
     private final EncryptionService encryptionService;
+    private final RepositoryRepository repositoryRepository;
+    private final PullRequestRepository pullRequestRepository;
 
     @Transactional
     public void linkAccount(User user, String githubUserId, String githubUsername, String rawAccessToken) {
@@ -49,9 +54,86 @@ public class GitHubIntegrationService {
     }
 
     public List<Map<String, Object>> getRepositoriesForUser(User user, int page, int perPage) {
+        validatePage(page, perPage);
         ConnectedGitHubAccount account = getConnectedAccount(user);
         String decryptedToken = encryptionService.decrypt(account.getAccessToken());
         return gitHubApiClient.getUserRepositories(decryptedToken, page, perPage);
+    }
+
+    @Transactional
+    public List<Repository> synchronizeRepositories(User user, int page, int perPage) {
+        List<Map<String, Object>> remoteRepositories = getRepositoriesForUser(user, page, perPage);
+        return remoteRepositories.stream()
+                .map(remote -> upsertRepository(user, remote))
+                .peek(repository -> repository.setLastSyncedAt(ZonedDateTime.now()))
+                .toList();
+    }
+
+    public List<Map<String, Object>> getPullRequests(User user, Repository repository, int page, int perPage) {
+        validatePage(page, perPage);
+        ConnectedGitHubAccount account = getConnectedAccount(user);
+        String token = encryptionService.decrypt(account.getAccessToken());
+        String[] parts = repository.getFullName().split("/", 2);
+        if (parts.length != 2) {
+            throw new IllegalStateException("Repository has an invalid GitHub full name");
+        }
+        return gitHubApiClient.getPullRequests(token, parts[0], parts[1], page, perPage);
+    }
+
+    @Transactional
+    public List<PullRequest> synchronizePullRequests(
+            User user, Repository repository, int page, int perPage) {
+        return getPullRequests(user, repository, page, perPage).stream()
+                .map(remote -> upsertPullRequest(repository, remote))
+                .toList();
+    }
+
+    private PullRequest upsertPullRequest(Repository repository, Map<String, Object> remote) {
+        Object rawNumber = remote.get("number");
+        if (!(rawNumber instanceof Number number)) {
+            throw new IllegalArgumentException("GitHub response is missing number");
+        }
+        PullRequest pullRequest = pullRequestRepository
+                .findByRepositoryIdAndPrNumber(repository.getId(), number.intValue())
+                .orElseGet(PullRequest::new);
+        pullRequest.setRepository(repository);
+        pullRequest.setPrNumber(number.intValue());
+        pullRequest.setTitle(requiredString(remote, "title"));
+        Object rawUser = remote.get("user");
+        Object login = rawUser instanceof Map<?, ?> values ? values.get("login") : null;
+        pullRequest.setAuthor(login == null ? "unknown" : String.valueOf(login));
+        pullRequest.setStatus(requiredString(remote, "state"));
+        return pullRequestRepository.save(pullRequest);
+    }
+
+    private Repository upsertRepository(User user, Map<String, Object> remote) {
+        String githubRepoId = String.valueOf(remote.get("id"));
+        Repository repository = repositoryRepository.findByGithubRepoIdAndOwnerId(githubRepoId, user.getId())
+                .orElseGet(Repository::new);
+        repository.setOwner(user);
+        repository.setGithubRepoId(githubRepoId);
+        repository.setName(requiredString(remote, "name"));
+        repository.setFullName(requiredString(remote, "full_name"));
+        repository.setDescription((String) remote.get("description"));
+        repository.setIsPrivate(Boolean.TRUE.equals(remote.get("private")));
+        repository.setDefaultBranch((String) remote.get("default_branch"));
+        repository.setHtmlUrl((String) remote.get("html_url"));
+        repository.setIsActive(true);
+        return repositoryRepository.save(repository);
+    }
+
+    private void validatePage(int page, int perPage) {
+        if (page < 1 || perPage < 1 || perPage > 100) {
+            throw new IllegalArgumentException("page must be >= 1 and perPage must be between 1 and 100");
+        }
+    }
+
+    private String requiredString(Map<String, Object> values, String key) {
+        Object value = values.get(key);
+        if (!(value instanceof String string) || string.isBlank()) {
+            throw new IllegalArgumentException("GitHub response is missing " + key);
+        }
+        return string;
     }
 
     public Map<String, Object> getPullRequestDetails(User user, Repository repository, int prNumber) {

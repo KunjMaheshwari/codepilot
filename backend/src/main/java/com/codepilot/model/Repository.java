@@ -33,6 +33,9 @@ public class Repository {
     @Column(nullable = false)
     private String name;
 
+    @Column(columnDefinition = "TEXT")
+    private String description;
+
     @Column(nullable = false, unique = true, length = 512)
     private String fullName;
 
@@ -45,6 +48,17 @@ public class Repository {
 
     @Column(nullable = false)
     private Boolean isActive = true;
+
+    @Column(nullable = false)
+    private Boolean isPrivate = false;
+
+    @Column(length = 512)
+    private String defaultBranch;
+
+    @Column(length = 1024)
+    private String htmlUrl;
+
+    private ZonedDateTime lastSyncedAt;
 
     @CreationTimestamp
     @Column(nullable = false, updatable = false)

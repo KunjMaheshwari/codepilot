@@ -34,10 +34,15 @@ public class RepositoryService {
 
     @Transactional(readOnly = true)
     public RepositoryDto getRepository(UUID id) {
-        User user = getAuthenticatedUser();
-        Repository repository = repositoryRepository.findByIdAndOwnerId(id, user.getId())
-                .orElseThrow(() -> new ResourceNotFoundException("Repository", "id", id));
+        Repository repository = getOwnedRepository(id);
         return new RepositoryDto(repository);
+    }
+
+    @Transactional(readOnly = true)
+    public Repository getOwnedRepository(UUID id) {
+        User user = getAuthenticatedUser();
+        return repositoryRepository.findByIdAndOwnerId(id, user.getId())
+                .orElseThrow(() -> new ResourceNotFoundException("Repository", "id", id));
     }
 
     public User getAuthenticatedUser() {

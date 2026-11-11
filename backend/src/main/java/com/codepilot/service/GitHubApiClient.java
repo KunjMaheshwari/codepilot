@@ -63,6 +63,18 @@ public class GitHubApiClient {
         });
     }
 
+    public List<Map<String, Object>> getPullRequests(
+            String accessToken, String owner, String repo, int page, int perPage) {
+        String url = String.format("%s/repos/%s/%s/pulls?state=all&page=%d&per_page=%d",
+                githubApiUrl, owner, repo, page, perPage);
+        return executeWithRetry(() -> {
+            ResponseEntity<List<Map<String, Object>>> response = restTemplate.exchange(
+                    url, HttpMethod.GET, new HttpEntity<>(createHeaders(accessToken)),
+                    new ParameterizedTypeReference<List<Map<String, Object>>>() {});
+            return response.getBody();
+        });
+    }
+
     public String getPullRequestDiff(String accessToken, String owner, String repo, int prNumber) {
         String url = String.format("%s/repos/%s/%s/pulls/%d", githubApiUrl, owner, repo, prNumber);
         return executeWithRetry(() -> {
