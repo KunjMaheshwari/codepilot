@@ -53,6 +53,15 @@ public class GlobalExceptionHandler {
         return buildError(HttpStatus.CONFLICT, "The request conflicts with existing data", request);
     }
 
+    @ExceptionHandler(GitHubApiException.class)
+    public ResponseEntity<ErrorResponse> handleGitHubApiException(
+            GitHubApiException ex, WebRequest request) {
+        HttpStatus status = ex.getStatus() == HttpStatus.UNAUTHORIZED
+                ? HttpStatus.BAD_GATEWAY
+                : ex.getStatus();
+        return buildError(status, ex.getMessage(), request);
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleGlobalException(Exception ex, WebRequest request) {
         ErrorResponse errorResponse = new ErrorResponse(

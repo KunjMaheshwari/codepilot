@@ -2,8 +2,11 @@ package com.codepilot.service;
 
 import com.codepilot.model.ConnectedGitHubAccount;
 import com.codepilot.model.Repository;
+import com.codepilot.model.PullRequest;
 import com.codepilot.model.User;
 import com.codepilot.repository.ConnectedGitHubAccountRepository;
+import com.codepilot.repository.RepositoryRepository;
+import com.codepilot.repository.PullRequestRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -21,6 +24,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
+import static org.mockito.ArgumentMatchers.any;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @ExtendWith(MockitoExtension.class)
@@ -34,6 +39,12 @@ class GitHubIntegrationServiceTest {
 
     @Mock
     private EncryptionService encryptionService;
+
+    @Mock
+    private RepositoryRepository repositoryRepository;
+
+    @Mock
+    private PullRequestRepository pullRequestRepository;
 
     @InjectMocks
     private GitHubIntegrationService gitHubIntegrationService;
@@ -105,5 +116,68 @@ class GitHubIntegrationServiceTest {
                 testUser, "github-user", "github-user", "raw-token"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("GitHub account is already connected to another user");
+    }
+
+    @Test
+    void synchronizePullRequestsMapsMetadataAndUpsertsByRepositoryAndNumber() {
+        testRepository.setId(UUID.randomUUID());
+        when(connectedGitHubAccountRepository.findByUserId(testUser.getId()))
+                .thenReturn(Optional.of(connectedAccount));
+        when(encryptionService.decrypt("test-token")).thenReturn("decrypted-token");
+        when(gitHubApiClient.getPullRequests("decrypted-token", "owner", "repo", 1, 20))
+                .thenReturn(List.of(Map.of(
+                        "number", 7,
+                        "title", "Improve review",
+                        "state", "closed",
+                        "user", Map.of("login", "contributor"),
+                        "base", Map.of("ref", "main", "sha", "base-sha"),
+                        "head", Map.of("ref", "feature", "sha", "head-sha"),
+                        "additions", 12,
+                        "deletions", 4,
+                        "changed_files", 2)));
+        when(pullRequestRepository.findByRepositoryIdAndPrNumber(testRepository.getId(), 7))
+                .thenReturn(Optional.empty());
+        when(pullRequestRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        List<PullRequest> result = gitHubIntegrationService
+                .synchronizePullRequests(testUser, testRepository, 1, 20);
+
+        assertThat(result).singleElement().satisfies(pr -> {
+            assertThat(pr.getPrNumber()).isEqualTo(7);
+            assertThat(pr.getBaseSha()).isEqualTo("base-sha");
+            assertThat(pr.getHeadSha()).isEqualTo("head-sha");
+            assertThat(pr.getAdditions()).isEqualTo(12);
+            assertThat(pr.getChangedFiles()).isEqualTo(2);
+        });
+        verify(pullRequestRepository).save(any(PullRequest.class));
+    }
+
+    @Test
+    void synchronizeRepositoriesUpdatesExistingRecordWithoutCreatingDuplicate() {
+        Repository existing = new Repository();
+        existing.setId(UUID.randomUUID());
+        when(connectedGitHubAccountRepository.findByUserId(testUser.getId()))
+                .thenReturn(Optional.of(connectedAccount));
+        when(encryptionService.decrypt("test-token")).thenReturn("decrypted-token");
+        when(gitHubApiClient.getUserRepositories("decrypted-token", 1, 10))
+                .thenReturn(List.of(Map.of(
+                        "id", 42,
+                        "name", "repo",
+                        "full_name", "owner/repo",
+                        "private", true,
+                        "default_branch", "main",
+                        "html_url", "https://github.com/owner/repo")));
+        when(repositoryRepository.findByGithubRepoIdAndOwnerId("42", testUser.getId()))
+                .thenReturn(Optional.of(existing));
+        when(repositoryRepository.save(any(Repository.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        List<Repository> result = gitHubIntegrationService
+                .synchronizeRepositories(testUser, 1, 10);
+
+        assertThat(result).singleElement().isSameAs(existing);
+        assertThat(existing.getGithubRepoId()).isEqualTo("42");
+        assertThat(existing.getIsPrivate()).isTrue();
+        verify(repositoryRepository).save(existing);
     }
 }
