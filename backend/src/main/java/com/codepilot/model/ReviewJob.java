@@ -31,7 +31,7 @@ public class ReviewJob {
     private UUID id;
 
     @OneToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "review_id", nullable = false)
+    @JoinColumn(name = "review_id", nullable = false, unique = true)
     private Review review;
 
     @Column(nullable = false, length = 50)

@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.UUID;
 
@@ -20,12 +21,14 @@ public class PullRequestService {
     private final PullRequestRepository pullRequestRepository;
     private final RepositoryService repositoryService;
 
+    @Transactional(readOnly = true)
     public PageDto<PullRequestDto> getPullRequests(Pageable pageable) {
         User user = repositoryService.getAuthenticatedUser();
         Page<PullRequest> pullRequests = pullRequestRepository.findByRepositoryOwnerId(user.getId(), pageable);
         return new PageDto<>(pullRequests.map(PullRequestDto::new));
     }
 
+    @Transactional(readOnly = true)
     public PullRequestDto getPullRequest(UUID id) {
         User user = repositoryService.getAuthenticatedUser();
         PullRequest pullRequest = pullRequestRepository.findByIdAndRepositoryOwnerId(id, user.getId())

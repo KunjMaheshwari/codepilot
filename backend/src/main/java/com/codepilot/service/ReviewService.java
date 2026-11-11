@@ -38,12 +38,14 @@ public class ReviewService {
     private final GitHubIntegrationService gitHubIntegrationService;
     private final RepositoryService repositoryService;
 
+    @Transactional(readOnly = true)
     public PageDto<ReviewDto> getReviews(Pageable pageable) {
         User user = repositoryService.getAuthenticatedUser();
         Page<Review> reviews = reviewRepository.findByPullRequestRepositoryOwnerId(user.getId(), pageable);
         return new PageDto<>(reviews.map(ReviewDto::new));
     }
 
+    @Transactional(readOnly = true)
     public ReviewDto getReview(UUID id) {
         User user = repositoryService.getAuthenticatedUser();
         Review review = reviewRepository.findByIdAndPullRequestRepositoryOwnerId(id, user.getId())
@@ -51,6 +53,7 @@ public class ReviewService {
         return new ReviewDto(review);
     }
 
+    @Transactional(readOnly = true)
     public PageDto<ReviewFindingDto> getReviewFindings(UUID reviewId, Pageable pageable) {
         User user = repositoryService.getAuthenticatedUser();
         Review review = reviewRepository.findByIdAndPullRequestRepositoryOwnerId(reviewId, user.getId())
@@ -60,7 +63,6 @@ public class ReviewService {
         return new PageDto<>(findings.map(ReviewFindingDto::new));
     }
 
-    @Transactional
     public ReviewDto createReview(UUID repositoryId, CreateReviewRequest request) {
         User user = repositoryService.getAuthenticatedUser();
         Repository repository = repositoryRepository.findByIdAndOwnerId(repositoryId, user.getId())

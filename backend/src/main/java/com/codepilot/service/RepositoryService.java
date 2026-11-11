@@ -14,6 +14,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.UUID;
 
@@ -24,12 +25,14 @@ public class RepositoryService {
     private final RepositoryRepository repositoryRepository;
     private final UserRepository userRepository;
 
+    @Transactional(readOnly = true)
     public PageDto<RepositoryDto> getRepositories(Pageable pageable) {
         User user = getAuthenticatedUser();
         Page<Repository> repositories = repositoryRepository.findByOwnerId(user.getId(), pageable);
         return new PageDto<>(repositories.map(RepositoryDto::new));
     }
 
+    @Transactional(readOnly = true)
     public RepositoryDto getRepository(UUID id) {
         User user = getAuthenticatedUser();
         Repository repository = repositoryRepository.findByIdAndOwnerId(id, user.getId())

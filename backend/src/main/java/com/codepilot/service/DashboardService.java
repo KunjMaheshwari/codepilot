@@ -6,6 +6,7 @@ import com.codepilot.repository.ReviewFindingRepository;
 import com.codepilot.repository.ReviewRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @RequiredArgsConstructor
@@ -16,6 +17,7 @@ public class DashboardService {
     private final RepositoryRepository repositoryRepository;
     private final RepositoryService repositoryService;
 
+    @Transactional(readOnly = true)
     public DashboardStatsDto getDashboardStats() {
         var userId = repositoryService.getAuthenticatedUser().getId();
         return DashboardStatsDto.builder()

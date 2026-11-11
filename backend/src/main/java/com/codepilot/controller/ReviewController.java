@@ -10,6 +10,8 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.data.web.PageableDefault;
+import org.springframework.data.domain.Sort;
 
 import java.util.UUID;
 
@@ -21,7 +23,8 @@ public class ReviewController {
     private final ReviewService reviewService;
 
     @GetMapping
-    public PageDto<ReviewDto> getReviews(Pageable pageable) {
+    public PageDto<ReviewDto> getReviews(
+            @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
         return reviewService.getReviews(pageable);
     }
 
@@ -31,7 +34,9 @@ public class ReviewController {
     }
 
     @GetMapping("/{id}/findings")
-    public PageDto<ReviewFindingDto> getReviewFindings(@PathVariable UUID id, Pageable pageable) {
+    public PageDto<ReviewFindingDto> getReviewFindings(
+            @PathVariable UUID id,
+            @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
         return reviewService.getReviewFindings(id, pageable);
     }
 }
