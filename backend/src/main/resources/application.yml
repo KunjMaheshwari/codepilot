@@ -2,9 +2,9 @@ spring:
   application:
     name: codepilot
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/codepilot}
-    username: ${DB_USERNAME:postgres}
-    password: ${DB_PASSWORD:postgres}
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
@@ -21,8 +21,8 @@ spring:
       client:
         registration:
           github:
-            client-id: ${GITHUB_CLIENT_ID:change-me}
-            client-secret: ${GITHUB_CLIENT_SECRET:change-me}
+            client-id: ${GITHUB_CLIENT_ID}
+            client-secret: ${GITHUB_CLIENT_SECRET}
             scope: user:email,repo
 
 springdoc:
@@ -33,4 +33,10 @@ springdoc:
 
 codepilot:
   encryption:
-    key: ${ENCRYPTION_KEY:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+    key: ${ENCRYPTION_KEY}
+
+gemini:
+  api:
+    key: ${GEMINI_API_KEY}
+    url: ${GEMINI_API_URL:https://generativelanguage.googleapis.com}
+    model: ${GEMINI_API_MODEL:gemini-1.5-pro}

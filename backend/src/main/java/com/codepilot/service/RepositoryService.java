@@ -39,14 +39,18 @@ public class RepositoryService {
 
     public User getAuthenticatedUser() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        if (authentication == null || !authentication.isAuthenticated()) {
+        if (authentication == null
+                || !authentication.isAuthenticated()
+                || !(authentication.getPrincipal() instanceof OAuth2User oauth2User)) {
             throw new IllegalStateException("No authenticated user found");
         }
 
-        OAuth2User oauth2User = (OAuth2User) authentication.getPrincipal();
         String email = oauth2User.getAttribute("email");
         if (email == null) {
             String login = oauth2User.getAttribute("login");
+            if (login == null || login.isBlank()) {
+                throw new IllegalStateException("Authenticated user has no usable identity");
+            }
             email = login + "@users.noreply.github.com";
         }
 

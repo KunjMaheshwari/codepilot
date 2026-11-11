@@ -14,13 +14,15 @@ public class DashboardService {
     private final ReviewRepository reviewRepository;
     private final ReviewFindingRepository reviewFindingRepository;
     private final RepositoryRepository repositoryRepository;
+    private final RepositoryService repositoryService;
 
     public DashboardStatsDto getDashboardStats() {
+        var userId = repositoryService.getAuthenticatedUser().getId();
         return DashboardStatsDto.builder()
-                .totalReviews(reviewRepository.count())
-                .issuesDetected(reviewFindingRepository.count())
-                .criticalIssues(0L) // Simplified for the foundation
-                .activeRepositories(repositoryRepository.count())
+                .totalReviews(reviewRepository.countByPullRequestRepositoryOwnerId(userId))
+                .issuesDetected(reviewFindingRepository.countByReviewPullRequestRepositoryOwnerId(userId))
+                .criticalIssues(reviewFindingRepository.countByReviewPullRequestRepositoryOwnerIdAndSeverity(userId, "CRITICAL"))
+                .activeRepositories(repositoryRepository.countByOwnerIdAndIsActiveTrue(userId))
                 .build();
     }
 }

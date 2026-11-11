@@ -55,7 +55,7 @@ public class ReviewResponseValidator {
                 }
             }
         } catch (JsonProcessingException e) {
-            log.error("Failed to parse AI JSON response: {}", jsonResponse, e);
+            log.error("Failed to parse AI JSON response", e);
         }
 
         return validFindings;

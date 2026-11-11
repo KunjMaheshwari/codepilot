@@ -27,6 +27,12 @@ public class GitHubIntegrationService {
 
     @Transactional
     public void linkAccount(User user, String githubUserId, String githubUsername, String rawAccessToken) {
+        connectedGitHubAccountRepository.findByGithubUserId(githubUserId)
+                .filter(existing -> !existing.getUser().getId().equals(user.getId()))
+                .ifPresent(existing -> {
+                    throw new IllegalStateException("GitHub account is already connected to another user");
+                });
+
         ConnectedGitHubAccount account = connectedGitHubAccountRepository.findByUserId(user.getId())
                 .orElse(new ConnectedGitHubAccount());
         account.setUser(user);

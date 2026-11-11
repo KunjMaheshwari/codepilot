@@ -21,6 +21,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @ExtendWith(MockitoExtension.class)
 class GitHubIntegrationServiceTest {
@@ -90,5 +91,19 @@ class GitHubIntegrationServiceTest {
         String diff = gitHubIntegrationService.getPullRequestDiff(testUser, testRepository, 1);
 
         assertThat(diff).isEqualTo("mock diff content");
+    }
+
+    @Test
+    void linkAccount_ShouldRejectAccountAlreadyOwnedByAnotherUser() {
+        User anotherUser = new User();
+        anotherUser.setId(UUID.randomUUID());
+        connectedAccount.setUser(anotherUser);
+        when(connectedGitHubAccountRepository.findByGithubUserId("github-user"))
+                .thenReturn(Optional.of(connectedAccount));
+
+        assertThatThrownBy(() -> gitHubIntegrationService.linkAccount(
+                testUser, "github-user", "github-user", "raw-token"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("GitHub account is already connected to another user");
     }
 }

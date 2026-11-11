@@ -13,4 +13,5 @@ public interface RepositoryRepository extends JpaRepository<Repository, UUID> {
     Page<Repository> findByOwnerId(UUID ownerId, Pageable pageable);
     Optional<Repository> findByIdAndOwnerId(UUID id, UUID ownerId);
     Optional<Repository> findByGithubRepoId(String githubRepoId);
+    long countByOwnerIdAndIsActiveTrue(UUID ownerId);
 }

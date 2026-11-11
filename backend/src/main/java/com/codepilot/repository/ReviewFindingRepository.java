@@ -11,4 +11,6 @@ import java.util.UUID;
 @Repository
 public interface ReviewFindingRepository extends JpaRepository<ReviewFinding, UUID> {
     Page<ReviewFinding> findByReviewId(UUID reviewId, Pageable pageable);
+    long countByReviewPullRequestRepositoryOwnerId(UUID ownerId);
+    long countByReviewPullRequestRepositoryOwnerIdAndSeverity(UUID ownerId, String severity);
 }
