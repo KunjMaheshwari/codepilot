@@ -1,0 +1,5 @@
+b50d207 chore: establish CodePilot development baseline and ignore artifacts
+1a49f17 Fix syntax in GeminiCodeReviewProvider
+74d3eea Save temp
+
+ERRORS:

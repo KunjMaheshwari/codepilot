@@ -45,6 +45,27 @@ public class ReviewFinding {
     @Column(nullable = false, columnDefinition = "TEXT")
     private String message;
 
+    @Column(length = 255)
+    private String title;
+
+    @Column(columnDefinition = "TEXT")
+    private String description;
+
+    @Column(length = 50)
+    private String category;
+
+    @Column(columnDefinition = "TEXT")
+    private String evidence;
+
+    @Column(columnDefinition = "TEXT")
+    private String impact;
+
+    @Column(columnDefinition = "TEXT")
+    private String suggestedFix;
+
+    @Column(length = 50)
+    private String confidence;
+
     @CreationTimestamp
     @Column(nullable = false, updatable = false)
     private ZonedDateTime createdAt;

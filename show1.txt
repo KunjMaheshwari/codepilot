@@ -1,0 +1,7 @@
+commit 1a49f1722af4467706cd527c0bfb54445265f876
+Author: google-labs-jules[bot] <161369871+google-labs-jules[bot]@users.noreply.github.com>
+Date:   Sat Nov 7 07:49:38 2026 +0000
+
+    Fix syntax in GeminiCodeReviewProvider
+
+M	backend/src/main/java/com/codepilot/ai/GeminiCodeReviewProvider.java

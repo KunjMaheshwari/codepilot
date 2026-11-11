@@ -1,0 +1,65 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Coverage directory used by tools like istanbul
+coverage
+*.lcov
+
+# nyc test coverage
+.nyc_output
+
+# Compiled binary addons (https://nodejs.org/api/addons.html)
+build/Release
+
+# Dependency directories
+node_modules/
+jspm_packages/
+frontend/node_modules/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# dotenv environment variables file
+.env
+.env.test
+
+# parcel-bundler cache (https://parceljs.org/)
+.cache
+
+# Next.js build output
+.next
+frontend/.next/
+out/
+
+# Nuxt.js build / generate output
+.nuxt
+dist
+
+# Java target directories
+target/
+backend/target/
+*.class
+
+# IDE configurations
+.idea/
+*.iml
+.vscode/
+
+# Ignore backend logs
+backend/mvn_output*.log
+backend/codepilot*.log
+
+# Temp files
+/tmp/*.log
+/tmp/*.txt

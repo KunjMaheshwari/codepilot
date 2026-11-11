@@ -19,3 +19,8 @@ spring:
 codepilot:
   encryption:
     key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+gemini:
+  api:
+    key: "mock-key"
+    url: "http://mock"
+    model: "mock"

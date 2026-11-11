@@ -1,0 +1,8 @@
+commit 74d3eea613b0ec85da170984f4328f078189a553
+Author: google-labs-jules[bot] <161369871+google-labs-jules[bot]@users.noreply.github.com>
+Date:   Sat Nov 7 06:23:26 2026 +0000
+
+    Save temp
+
+M	backend/src/main/java/com/codepilot/ai/CodeReviewProvider.java
+A	backend/src/main/java/com/codepilot/ai/GeminiCodeReviewProvider.java

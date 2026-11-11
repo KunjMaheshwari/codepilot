@@ -34,7 +34,7 @@ public class ReviewService {
     private final ReviewFindingRepository reviewFindingRepository;
     private final PullRequestRepository pullRequestRepository;
     private final RepositoryRepository repositoryRepository;
-    private final MockAiReviewEngine aiReviewEngine;
+    private final CodeReviewOrchestrator orchestrator;
     private final GitHubIntegrationService gitHubIntegrationService;
     private final RepositoryService repositoryService;
 
@@ -87,14 +87,14 @@ public class ReviewService {
 
     private void processReview(Review review, PullRequest pullRequest, Repository repository, User user) {
         try {
-            String diff = gitHubIntegrationService.getPullRequestDiff(user, repository, pullRequest.getPrNumber());
+            // String diff = gitHubIntegrationService.getPullRequestDiff(user, repository, pullRequest.getPrNumber());
 
-            List<ReviewFinding> findings = aiReviewEngine.analyzeDiff(review, diff);
-            reviewFindingRepository.saveAll(findings);
-            review.setStatus("COMPLETED");
+            // List<ReviewFinding> findings = aiReviewEngine.analyzeDiff(review, diff);
+            orchestrator.executeReview(review, pullRequest, repository, user);
+            // Status is updated by the orchestrator
         } catch (Exception e) {
             log.error("Error processing review", e);
-            review.setStatus("FAILED");
+            // review.setStatus("FAILED");
         } finally {
             review.setCompletedAt(ZonedDateTime.now());
             reviewRepository.save(review);

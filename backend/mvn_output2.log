@@ -1,0 +1,84 @@
+[INFO] Scanning for projects...
+[INFO]
+[INFO] -----------------------< com.codepilot:backend >------------------------
+[INFO] Building CodePilot Backend 0.0.1-SNAPSHOT
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO]
+[INFO] --- resources:3.3.1:resources (default-resources) @ backend ---
+[INFO] Copying 2 resources from src/main/resources to target/classes
+[INFO] Copying 1 resource from src/main/resources to target/classes
+[INFO]
+[INFO] --- compiler:3.11.0:compile (default-compile) @ backend ---
+[INFO] Changes detected - recompiling the module! :source
+[INFO] Compiling 47 source files with javac [debug release 21] to target/classes
+[INFO] Annotation processing is enabled because one or more processors were found
+  on the class path. A future release of javac may disable annotation processing
+  unless at least one processor is specified by name (-processor), or a search
+  path is specified (--processor-path, --processor-module-path), or annotation
+  processing is enabled explicitly (-proc:only, -proc:full).
+  Use -Xlint:-options to suppress this message.
+  Use -proc:none to disable annotation processing.
+[INFO]
+[INFO] --- resources:3.3.1:testResources (default-testResources) @ backend ---
+[INFO] Copying 1 resource from src/test/resources to target/test-classes
+[INFO]
+[INFO] --- compiler:3.11.0:testCompile (default-testCompile) @ backend ---
+[INFO] Changes detected - recompiling the module! :dependency
+[INFO] Compiling 8 source files with javac [debug release 21] to target/test-classes
+[INFO] Annotation processing is enabled because one or more processors were found
+  on the class path. A future release of javac may disable annotation processing
+  unless at least one processor is specified by name (-processor), or a search
+  path is specified (--processor-path, --processor-module-path), or annotation
+  processing is enabled explicitly (-proc:only, -proc:full).
+  Use -Xlint:-options to suppress this message.
+  Use -proc:none to disable annotation processing.
+[INFO] -------------------------------------------------------------
+[ERROR] COMPILATION ERROR :
+[INFO] -------------------------------------------------------------
+[ERROR] /app/backend/src/test/java/com/codepilot/ai/CodeReviewOrchestratorTest.java:[12,29] cannot find symbol
+  symbol:   class ReviewJobService
+  location: package com.codepilot.service
+[ERROR] /app/backend/src/test/java/com/codepilot/ai/CodeReviewOrchestratorTest.java:[42,13] cannot find symbol
+  symbol:   class GeminiCodeReviewProvider
+  location: class com.codepilot.ai.CodeReviewOrchestratorTest
+[ERROR] /app/backend/src/test/java/com/codepilot/ai/CodeReviewOrchestratorTest.java:[54,13] cannot find symbol
+  symbol:   class ReviewJobService
+  location: class com.codepilot.ai.CodeReviewOrchestratorTest
+[ERROR] /app/backend/src/test/java/com/codepilot/ai/CodeReviewOrchestratorTest.java:[57,13] cannot find symbol
+  symbol:   class CodeReviewOrchestrator
+  location: class com.codepilot.ai.CodeReviewOrchestratorTest
+[ERROR] /app/backend/src/test/java/com/codepilot/ai/AiReviewEngineIntegrationTest.java:[69,13] cannot find symbol
+  symbol:   class GeminiCodeReviewProvider
+  location: class com.codepilot.ai.AiReviewEngineIntegrationTest
+[INFO] 5 errors
+[INFO] -------------------------------------------------------------
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD FAILURE
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  6.567 s
+[INFO] Finished at: 2026-11-06T06:02:02Z
+[INFO] ------------------------------------------------------------------------
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-compiler-plugin:3.11.0:testCompile (default-testCompile) on project backend: Compilation failure: Compilation failure:
+[ERROR] /app/backend/src/test/java/com/codepilot/ai/CodeReviewOrchestratorTest.java:[12,29] cannot find symbol
+[ERROR]   symbol:   class ReviewJobService
+[ERROR]   location: package com.codepilot.service
+[ERROR] /app/backend/src/test/java/com/codepilot/ai/CodeReviewOrchestratorTest.java:[42,13] cannot find symbol
+[ERROR]   symbol:   class GeminiCodeReviewProvider
+[ERROR]   location: class com.codepilot.ai.CodeReviewOrchestratorTest
+[ERROR] /app/backend/src/test/java/com/codepilot/ai/CodeReviewOrchestratorTest.java:[54,13] cannot find symbol
+[ERROR]   symbol:   class ReviewJobService
+[ERROR]   location: class com.codepilot.ai.CodeReviewOrchestratorTest
+[ERROR] /app/backend/src/test/java/com/codepilot/ai/CodeReviewOrchestratorTest.java:[57,13] cannot find symbol
+[ERROR]   symbol:   class CodeReviewOrchestrator
+[ERROR]   location: class com.codepilot.ai.CodeReviewOrchestratorTest
+[ERROR] /app/backend/src/test/java/com/codepilot/ai/AiReviewEngineIntegrationTest.java:[69,13] cannot find symbol
+[ERROR]   symbol:   class GeminiCodeReviewProvider
+[ERROR]   location: class com.codepilot.ai.AiReviewEngineIntegrationTest
+[ERROR] -> [Help 1]
+[ERROR]
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR]
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException

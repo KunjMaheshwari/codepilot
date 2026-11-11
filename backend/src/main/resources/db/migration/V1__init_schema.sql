@@ -55,6 +55,13 @@ CREATE TABLE review_findings (
     file_path VARCHAR(1024) NOT NULL,
     line_number INTEGER,
     severity VARCHAR(50) NOT NULL,
+    title VARCHAR(255),
+    description TEXT,
+    category VARCHAR(50),
+    evidence TEXT,
+    impact TEXT,
+    suggested_fix TEXT,
+    confidence VARCHAR(50),
     message TEXT NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL,
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL
