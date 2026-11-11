@@ -34,6 +34,9 @@ springdoc:
 codepilot:
   encryption:
     key: ${ENCRYPTION_KEY}
+  review:
+    max-file-bytes: ${CODEPILOT_REVIEW_MAX_FILE_BYTES:102400}
+    max-diff-bytes: ${CODEPILOT_REVIEW_MAX_DIFF_BYTES:2097152}
 
 gemini:
   api:

@@ -44,23 +44,27 @@ public class CodeReviewOrchestrator {
             List<DiffParser.ParsedFile> parsedFiles = diffParser.parseDiff(diff);
 
             if (parsedFiles == null || parsedFiles.isEmpty()) {
-                review.setStatus("COMPLETED");
-                reviewRepository.save(review);
-                reviewJobService.updateStatus(job, "COMPLETED");
-                return;
+                throw new IllegalStateException("Pull request diff is empty or unavailable");
             }
 
-            List<ReviewFinding> findings = reviewProvider.reviewDiff(diff, parsedFiles);
+            List<DiffParser.ParsedFile> reviewableFiles = parsedFiles.stream()
+                    .filter(DiffParser.ParsedFile::isReviewable)
+                    .toList();
+            if (reviewableFiles.isEmpty()) {
+                throw new IllegalStateException("Pull request diff has no reviewable source files");
+            }
+
+            List<ReviewFinding> findings = reviewProvider.reviewDiff(diff, reviewableFiles);
 
             if (findings != null && !findings.isEmpty()) {
                 findings.forEach(f -> f.setReview(review));
                 findingRepository.saveAll(findings);
             }
 
-            review.setStatus("COMPLETED");
+            review.setStatus(reviewableFiles.size() == parsedFiles.size() ? "COMPLETED" : "PARTIAL");
             reviewRepository.save(review);
 
-            reviewJobService.updateStatus(job, "COMPLETED");
+            reviewJobService.updateStatus(job, review.getStatus());
             log.info("Review orchestration completed successfully for job ID: {}", job.getId());
         } catch (Exception e) {
             log.error("Failed to orchestrate review for job ID: {}", job.getId(), e);

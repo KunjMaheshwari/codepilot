@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ReviewResponseValidatorTest {
 
@@ -22,7 +23,11 @@ class ReviewResponseValidatorTest {
                     "filePath": "src/Test.java",
                     "lineNumber": 3,
                     "category": "CODE_QUALITY",
-                    "severity": "LOW"
+                    "severity": "LOW",
+                    "evidence": "z",
+                    "impact": "None",
+                    "suggestedFix": "Remove z",
+                    "confidence": "HIGH"
                 },
                 {
                     "title": "Invalid Line",
@@ -30,7 +35,11 @@ class ReviewResponseValidatorTest {
                     "filePath": "src/Test.java",
                     "lineNumber": 1,
                     "category": "BUG",
-                    "severity": "HIGH"
+                    "severity": "HIGH",
+                    "evidence": "unchanged",
+                    "impact": "None",
+                    "suggestedFix": "No change",
+                    "confidence": "HIGH"
                 }
             ]
             """;
@@ -39,14 +48,9 @@ class ReviewResponseValidatorTest {
         file.setFilePath("src/Test.java");
         file.getAddedLines().add(3);
 
-        List<ReviewFinding> findings = validator.validateAndParse(json, List.of(file));
-
-        // Should only return the finding on the added line (line 3)
-        assertThat(findings).hasSize(1);
-        ReviewFinding validFinding = findings.get(0);
-        assertThat(validFinding.getTitle()).isEqualTo("Unused Variable");
-        assertThat(validFinding.getLineNumber()).isEqualTo(3);
-        assertThat(validFinding.getCategory()).isEqualTo("CODE_QUALITY");
+        assertThatThrownBy(() -> validator.validateAndParse(json, List.of(file)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Finding references a non-added line");
     }
 
     @Test
@@ -57,7 +61,13 @@ class ReviewResponseValidatorTest {
                     "title": "Test",
                     "description": "Desc",
                     "filePath": "src/Test.java",
-                    "lineNumber": 2
+                    "lineNumber": 2,
+                    "category": "BUG",
+                    "severity": "LOW",
+                    "evidence": "changed code",
+                    "impact": "Potential defect",
+                    "suggestedFix": "Correct the code",
+                    "confidence": "MEDIUM"
                 }
             ]
             """ + "\n```";
@@ -69,5 +79,44 @@ class ReviewResponseValidatorTest {
         List<ReviewFinding> findings = validator.validateAndParse(json, List.of(file));
 
         assertThat(findings).hasSize(1);
+    }
+
+    @Test
+    void rejectsInvalidSchemaAndDuplicateFindings() {
+        String json = """
+                [
+                  {
+                    "title": "Bug",
+                    "description": "Problem",
+                    "category": "BUG",
+                    "severity": "HIGH",
+                    "filePath": "src/Test.java",
+                    "lineNumber": 2,
+                    "evidence": "bad",
+                    "impact": "failure",
+                    "suggestedFix": "fix it",
+                    "confidence": "HIGH"
+                  },
+                  {
+                    "title": "Bug",
+                    "description": "Problem",
+                    "category": "BUG",
+                    "severity": "HIGH",
+                    "filePath": "src/Test.java",
+                    "lineNumber": 2,
+                    "evidence": "bad",
+                    "impact": "failure",
+                    "suggestedFix": "fix it",
+                    "confidence": "HIGH"
+                  }
+                ]
+                """;
+        DiffParser.ParsedFile file = new DiffParser.ParsedFile();
+        file.setFilePath("src/Test.java");
+        file.getAddedLines().add(2);
+
+        assertThat(validator.validateAndParse(json, List.of(file))).hasSize(1);
+        assertThatThrownBy(() -> validator.validateAndParse(json.replace("\"HIGH\"", "\"INVALID\""),
+                List.of(file))).isInstanceOf(IllegalArgumentException.class);
     }
 }
