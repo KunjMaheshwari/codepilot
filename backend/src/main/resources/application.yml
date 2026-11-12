@@ -61,11 +61,13 @@ codepilot:
       enabled: ${CODEPILOT_REVIEW_ASYNC_ENABLED:true}
       queue: ${CODEPILOT_REVIEW_QUEUE:codepilot:review-jobs}
       processing-queue: ${CODEPILOT_REVIEW_PROCESSING_QUEUE:codepilot:review-jobs:processing}
+      retry-queue: ${CODEPILOT_REVIEW_RETRY_QUEUE:codepilot:review-jobs:retry}
       dead-letter-queue: ${CODEPILOT_REVIEW_DEAD_LETTER_QUEUE:codepilot:review-jobs:dead-letter}
       max-attempts: ${CODEPILOT_REVIEW_MAX_ATTEMPTS:3}
       worker-delay-ms: ${CODEPILOT_REVIEW_WORKER_DELAY_MS:1000}
       heartbeat-interval-ms: ${CODEPILOT_REVIEW_HEARTBEAT_INTERVAL_MS:10000}
       processing-timeout-seconds: ${CODEPILOT_REVIEW_PROCESSING_TIMEOUT_SECONDS:900}
+      queued-recovery-seconds: ${CODEPILOT_REVIEW_QUEUED_RECOVERY_SECONDS:60}
   webhook:
     max-payload-bytes: ${CODEPILOT_WEBHOOK_MAX_PAYLOAD_BYTES:1048576}
     max-attempts: ${CODEPILOT_WEBHOOK_MAX_ATTEMPTS:5}

@@ -115,19 +115,15 @@ While the repository has a clean architectural skeleton (Spring Boot 3.2.3 API +
 * **Fix applied:** Tracked `activeJobIds` (`ConcurrentHashMap.newKeySet()`) in `ReviewJobWorker` around `orchestrateReview(job)` and scoped `touchProcessingJobs(Collection<UUID> ids)` to `WHERE id IN (:ids) AND status = 'PROCESSING'`.
 * **Verification:** `PostgresRedisInfrastructureIntegrationTest.scopedHeartbeatOnlyTouchesSpecifiedProcessingJobs` verified only the specified job's heartbeat is updated.
 
-### P1-3: Single-Threaded `@Scheduled` Starvation & Blocking `Thread.sleep` in Worker — **PARTIALLY FIXED (Phase 3)**
-* **File/module affected:** `backend/src/main/java/com/codepilot/config/AsyncReviewConfig.java`, `backend/src/main/java/com/codepilot/service/ReviewJobWorker.java` (line 86)
-* **Fix applied:** Configured a `ThreadPoolTaskScheduler` bean (`poolSize=4`, `waitForTasksToCompleteOnShutdown=true`, `awaitTerminationSeconds=20`) in `AsyncReviewConfig` and enabled `server.shutdown: graceful` (`30s` phase timeout) in `application.yml`.
-* **Remaining limitation:** `ReviewJobWorker.poll()` still uses `Thread.sleep(...)` on retry; replacing it with a non-blocking Redis ZSET delayed queue is deferred.
+### P1-3: Single-Threaded `@Scheduled` Starvation & Blocking `Thread.sleep` in Worker — **FIXED (Phase 4)**
+* **File/module affected:** `backend/src/main/java/com/codepilot/config/AsyncReviewConfig.java`, `backend/src/main/java/com/codepilot/service/ReviewJobWorker.java`, `backend/src/main/resources/application.yml`
+* **Fix applied:** Configured a `ThreadPoolTaskScheduler` bean (`poolSize=4`, `waitForTasksToCompleteOnShutdown=true`) in `AsyncReviewConfig`, removed `Thread.sleep(...)` from `ReviewJobWorker.poll()`, implemented non-blocking delayed retries via Redis ZSET (`codepilot:review-jobs:retry`) with bounded exponential backoff + jitter and `@Scheduled promoteDueRetries()`, and added `processedCount`/`retryScheduledCount`/`deadLetterCount` observability counters.
+* **Verification:** `ReviewJobWorkerTest` and `AsyncReliabilityIntegrationTest` verified non-blocking retry scheduling, ZSET promotion, and DLQ handling with zero `Thread.sleep` in worker paths.
 
-### P1-4: Stale `attemptCount` and Self-Invoked `@Transactional` in `GitHubWebhookService`
-* **File/module affected:** `backend/src/main/java/com/codepilot/service/GitHubWebhookService.java` (lines 81–84, 131–163)
-* **Exact problem:**
-  1. `deliveryRepository.claim(candidate.getId(), maxAttempts)` increments `attempt_count` in PostgreSQL, not on the in-memory `candidate` object. `markFailed(delivery, ...)` checks `delivery.getAttemptCount() < maxAttempts` using the stale count (allowing an extra retry beyond `maxAttempts` and persisting the stale `attemptCount` on `save(delivery)`).
-  2. `process()` calls `this.markProcessed(...)`, `this.markIgnored(...)`, and `this.markFailed(...)` via internal self-invocation, bypassing Spring's `@Transactional` proxy.
-* **User/business impact:** Webhook retry counts are corrupted in the database (`save(delivery)` overwrites the incremented `attempt_count` back to `0`!).
-* **Recommended fix:** Reload `WebhookDelivery` after `claim(...)` or perform status/error updates via dedicated `@Modifying` queries or a separate transactional helper bean.
-* **Verification method:** Integration test simulating `maxAttempts` consecutive webhook failures and asserting `attempt_count` increments monotonically and stops retrying at `maxAttempts`.
+### P1-4: Stale `attemptCount` and Self-Invoked `@Transactional` in `GitHubWebhookService` — **FIXED (Phase 4)**
+* **File/module affected:** `backend/src/main/java/com/codepilot/service/WebhookDeliveryStateService.java`, `backend/src/main/java/com/codepilot/service/GitHubWebhookService.java`
+* **Fix applied:** Extracted `WebhookDeliveryStateService` with `@Transactional` boundaries for `findPendingDeliveries`, `claim`, `markProcessed`, `markIgnored`, and `markFailed`, eliminating self-invocation proxy bypass and preserving accurate `attemptCount` and `nextAttemptAt`.
+* **Verification:** `PostgresRedisInfrastructureIntegrationTest` and `AsyncReliabilityIntegrationTest` verified duplicate delivery idempotency, failed delivery retry scheduling, and transactional state transitions on PostgreSQL 17.
 
 ### P1-5: AI Findings Are Never Posted Back to GitHub Pull Requests
 * **File/module affected:** `backend/src/main/java/com/codepilot/service/CodeReviewOrchestrator.java` (lines 58–70), `backend/src/main/java/com/codepilot/service/GitHubApiClient.java`, `backend/src/main/java/com/codepilot/service/GitHubIntegrationService.java`
@@ -271,20 +267,14 @@ While the repository has a clean architectural skeleton (Spring Boot 3.2.3 API +
 
 ## 9. Build and Test Results (Actual Evidence)
 
-### Backend (Updated After Phase 3 PostgreSQL, Flyway & Redis Infrastructure Fixes)
-* **`cd backend && mvn clean test -B && mvn verify -B`:** **PASSED** (exit code 0; `Tests run: 62, Failures: 0, Errors: 0, Skipped: 0`).
-  * **Unit tests (53):** Existing 50 unit tests + 3 new `StartupConfigurationValidatorTest` cases.
+### Backend (Updated After Phase 4 Async Review & Webhook Reliability Fixes)
+* **`cd backend && mvn clean test -B && mvn verify -B`:** **PASSED** (exit code 0; `Tests run: 71, Failures: 0, Errors: 0, Skipped: 0`).
+  * **Unit tests (57):** Existing 50 + 3 `StartupConfigurationValidatorTest` + 3 new `ReviewJobWorkerTest` (ZSET retry, DLQ exhaustion, ZSET promotion) + 1 new `ReviewJobServiceTest` (terminal state protection).
   * **H2/Spring Boot integration tests (5):** `CodePilotApplicationTests` (1), `AiReviewEngineIntegrationTest` (3), `RepositoryControllerTest` (1).
-  * **PostgreSQL 17 + Redis 7 Testcontainers infrastructure tests (4):** `PostgresRedisInfrastructureIntegrationTest` (Flyway V1–V6 migration verification on `postgres:17-alpine`, JPA + `ReviewJobProducer` + `redis:7-alpine` queue round-trip, scoped heartbeat, and transactional `WebhookDelivery` claim/processing).
-* **Infrastructure & Config Hardening Applied:**
-  * HikariCP pool & timeout settings (`maximum-pool-size`, `minimum-idle`, `connection-timeout`, `validation-timeout`, `idle-timeout`, `max-lifetime`) and `server.shutdown: graceful` added to `application.yml`.
-  * `spring.data.redis.repositories.enabled: false` added to `application.yml` to eliminate Spring Data Redis scanning ambiguity.
-  * `Repository.defaultBranch` column length aligned to `255` matching `V3__add_github_metadata.sql`.
-  * `StartupConfigurationValidator` added to fail fast with clear missing env-var names outside the `test` profile.
-* **Remaining Infrastructure Limitations:**
-  * `GitHubWebhookService` still uses `@Scheduled` DB polling + self-invoked `@Transactional` status helpers (`markProcessed`/`markIgnored`/`markFailed`).
-  * `ReviewJobWorker.poll()` still uses `Thread.sleep` on retry instead of a Redis delayed ZSET.
-  * `docker-compose.yml` and production `Dockerfile`s are not yet created (deferred to Phase 6).
+  * **PostgreSQL 17 + Redis 7 Testcontainers infrastructure & reliability tests (9):** `PostgresRedisInfrastructureIntegrationTest` (4) + `AsyncReliabilityIntegrationTest` (5: concurrent atomic claiming across 4 threads, duplicate PR/head-SHA idempotency, stale `PROCESSING` crash recovery, `PENDING` & stale `QUEUED` restart recovery, duplicate & failed webhook delivery recovery).
+* **Remaining Risks (Deferred to Phase 5+):**
+  * `GitHubApiClient.waitBeforeRetry(...)` still uses `Thread.sleep` for short (<=5s) GitHub rate-limit backoffs during synchronous HTTP calls.
+  * `CodeReviewOrchestrator` still does not post review comments back to GitHub (`P1-5`), and `ReviewResponseValidator` (`P1-8`) / `SecurityConfig` (`P0-2`, `P0-3`) / frontend (`P0-5`, `P1-6`) remain for upcoming phases.
 
 ### Frontend
 * **Lint & Production Build (`cd frontend && npm run lint && npm run build`):** **PASSED** (exit code 0)

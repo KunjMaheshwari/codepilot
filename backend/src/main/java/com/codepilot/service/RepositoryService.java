@@ -3,8 +3,10 @@ package com.codepilot.service;
 import com.codepilot.dto.PageDto;
 import com.codepilot.dto.RepositoryDto;
 import com.codepilot.exception.ResourceNotFoundException;
+import com.codepilot.model.ConnectedGitHubAccount;
 import com.codepilot.model.Repository;
 import com.codepilot.model.User;
+import com.codepilot.repository.ConnectedGitHubAccountRepository;
 import com.codepilot.repository.RepositoryRepository;
 import com.codepilot.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -24,6 +26,7 @@ public class RepositoryService {
 
     private final RepositoryRepository repositoryRepository;
     private final UserRepository userRepository;
+    private final ConnectedGitHubAccountRepository connectedGitHubAccountRepository;
 
     @Transactional(readOnly = true)
     public PageDto<RepositoryDto> getRepositories(Pageable pageable) {

@@ -45,7 +45,6 @@ public class CodeReviewOrchestrator {
             if (review.getStartedAt() == null) {
                 review.setStartedAt(ZonedDateTime.now());
             }
-            reviewRepository.save(review);
 
             String diff = githubService.getPullRequestDiff(pr.getRepository().getOwner(), pr.getRepository(), pr.getPrNumber());
             List<DiffParser.ParsedFile> parsedFiles = diffParser.parseDiff(diff);

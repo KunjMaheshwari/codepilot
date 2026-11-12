@@ -79,3 +79,4 @@ public class WebhookDeliveryStateService {
         return message.length() > 500 ? message.substring(0, 500) : message;
     }
 }
+
