@@ -9,6 +9,7 @@ import com.codepilot.model.User;
 import com.codepilot.repository.ReviewFindingRepository;
 import com.codepilot.repository.ReviewRepository;
 import com.codepilot.service.GitHubIntegrationService;
+import com.codepilot.service.GitHubReviewPublisher;
 import com.codepilot.service.ReviewJobService;
 import com.codepilot.service.CodeReviewOrchestrator;
 import org.junit.jupiter.api.BeforeEach;
@@ -47,6 +48,9 @@ class CodeReviewOrchestratorTest {
 
     @Mock
     private ReviewJobService reviewJobService;
+
+    @Mock
+    private GitHubReviewPublisher gitHubReviewPublisher;
 
     @InjectMocks
     private CodeReviewOrchestrator orchestrator;

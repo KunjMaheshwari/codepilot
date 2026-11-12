@@ -52,7 +52,7 @@ public class Repository {
     @Column(nullable = false)
     private Boolean isPrivate = false;
 
-    @Column(length = 512)
+    @Column(length = 255)
     private String defaultBranch;
 
     @Column(length = 1024)

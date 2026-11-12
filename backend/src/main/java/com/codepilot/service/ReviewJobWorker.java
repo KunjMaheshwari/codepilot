@@ -11,6 +11,11 @@ import org.springframework.beans.factory.annotation.Qualifier;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicLong;
 import com.fasterxml.jackson.core.JsonProcessingException;
 
 @Service
@@ -22,6 +27,10 @@ public class ReviewJobWorker {
     private final ReviewJobService reviewJobService;
     private final CodeReviewOrchestrator orchestrator;
     private final ReviewJobRepositoryFacade jobRepository;
+    private final Set<UUID> activeJobIds = ConcurrentHashMap.newKeySet();
+    private final AtomicLong processedCount = new AtomicLong();
+    private final AtomicLong retryScheduledCount = new AtomicLong();
+    private final AtomicLong deadLetterCount = new AtomicLong();
 
     public ReviewJobWorker(
             @Qualifier("reviewRedisTemplate") RedisTemplate<String, String> redisTemplate,
@@ -41,6 +50,9 @@ public class ReviewJobWorker {
 
     @Value("${codepilot.review.async.processing-queue:codepilot:review-jobs:processing}")
     private String processingQueue;
+
+    @Value("${codepilot.review.async.retry-queue:codepilot:review-jobs:retry}")
+    private String retryQueue = "codepilot:review-jobs:retry";
 
     @Value("${codepilot.review.async.dead-letter-queue:codepilot:review-jobs:dead-letter}")
     private String deadLetterQueue;
@@ -80,27 +92,79 @@ public class ReviewJobWorker {
                 acknowledge(payload);
                 return;
             }
-            orchestrator.orchestrateReview(job);
+            activeJobIds.add(job.getId());
+            try {
+                orchestrator.orchestrateReview(job);
+            } finally {
+                activeJobIds.remove(job.getId());
+            }
             if ("FAILED".equals(job.getStatus()) && job.getAttemptCount() < maxAttempts) {
                 reviewJobService.markRetrying(job, job.getErrorMessage());
-                Thread.sleep(Math.min(1000L * (1L << Math.min(job.getAttemptCount(), 5)), 30000L));
-                redisTemplate.opsForList().leftPush(queue, payload);
+                long delayMs = computeRetryDelayMillis(job.getAttemptCount());
+                long executeAt = System.currentTimeMillis() + delayMs;
+                redisTemplate.opsForZSet().add(retryQueue, payload, executeAt);
+                retryScheduledCount.incrementAndGet();
+                log.warn("Scheduled delayed retry jobId={} correlationId={} attempt={} delayMs={}",
+                        job.getId(), job.getCorrelationId(), job.getAttemptCount(), delayMs);
             } else if ("FAILED".equals(job.getStatus())) {
                 redisTemplate.opsForList().leftPush(deadLetterQueue, payload);
+                deadLetterCount.incrementAndGet();
+                log.error("Exhausted review job moved to dead-letter queue jobId={} correlationId={} attempt={}",
+                        job.getId(), job.getCorrelationId(), job.getAttemptCount());
+            } else {
+                processedCount.incrementAndGet();
             }
             acknowledge(payload);
         } catch (JsonProcessingException exception) {
             moveToDeadLetter(payload);
+            deadLetterCount.incrementAndGet();
             log.error("Moved malformed review job message to dead-letter queue");
         } catch (Exception exception) {
             log.error("Review worker failed for job payload; leaving it in processing queue", exception);
         }
     }
 
+    @Scheduled(fixedDelayString = "${codepilot.review.async.worker-delay-ms:1000}")
+    public void promoteDueRetries() {
+        if (!enabled) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        Set<String> duePayloads = redisTemplate.opsForZSet().rangeByScore(retryQueue, 0, now, 0, 50);
+        if (duePayloads == null || duePayloads.isEmpty()) {
+            return;
+        }
+        for (String payload : duePayloads) {
+            Long removed = redisTemplate.opsForZSet().remove(retryQueue, payload);
+            if (removed != null && removed > 0) {
+                redisTemplate.opsForList().leftPush(queue, payload);
+                log.info("Promoted due retry message to main review queue");
+            }
+        }
+    }
+
+    long computeRetryDelayMillis(int attemptCount) {
+        long base = Math.min(1000L * (1L << Math.min(Math.max(attemptCount, 1), 5)), 30000L);
+        long jitter = ThreadLocalRandom.current().nextLong(0, Math.max(1L, base / 4));
+        return Math.min(base + jitter, 35000L);
+    }
+
+    public long getProcessedCount() {
+        return processedCount.get();
+    }
+
+    public long getRetryScheduledCount() {
+        return retryScheduledCount.get();
+    }
+
+    public long getDeadLetterCount() {
+        return deadLetterCount.get();
+    }
+
     @Scheduled(fixedDelayString = "${codepilot.review.async.heartbeat-interval-ms:10000}")
     public void heartbeat() {
-        if (enabled) {
-            reviewJobService.touchProcessingJobs();
+        if (enabled && !activeJobIds.isEmpty()) {
+            reviewJobService.touchProcessingJobs(activeJobIds);
         }
     }
 

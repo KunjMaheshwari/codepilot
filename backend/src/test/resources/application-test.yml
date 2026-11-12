@@ -30,3 +30,6 @@ gemini:
     key: "mock-key"
     url: "http://mock"
     model: "mock"
+
+server:
+  forward-headers-strategy: framework

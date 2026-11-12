@@ -13,15 +13,21 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.time.ZonedDateTime;
 
 @Service
 @Slf4j
 @RequiredArgsConstructor
 public class GitHubIntegrationService {
+
+    private static final int MAX_SYNC_PAGES = 10;
+    private static final int DEFAULT_SYNC_PAGE_SIZE = 100;
 
     private final GitHubApiClient gitHubApiClient;
     private final ConnectedGitHubAccountRepository connectedGitHubAccountRepository;
@@ -73,14 +79,52 @@ public class GitHubIntegrationService {
                 .toList();
     }
 
+    /**
+     * Paginates through the user's GitHub repositories and upserts each by immutable
+     * GitHub repository ID. Only when full pagination completes does it deactivate
+     * previously active repositories that are no longer returned by GitHub.
+     */
+    @Transactional
+    public List<Repository> synchronizeAllRepositories(User user) {
+        ConnectedGitHubAccount account = getConnectedAccount(user);
+        String token = encryptionService.decrypt(account.getAccessToken());
+        List<Repository> synced = new ArrayList<>();
+        Set<String> seenGithubRepoIds = new HashSet<>();
+        boolean completedFullScan = false;
+        ZonedDateTime syncedAt = ZonedDateTime.now();
+
+        for (int page = 1; page <= MAX_SYNC_PAGES; page++) {
+            List<Map<String, Object>> pageItems = gitHubApiClient.getUserRepositories(
+                    token, page, DEFAULT_SYNC_PAGE_SIZE);
+            for (Map<String, Object> remote : pageItems) {
+                Repository repository = upsertRepository(user, remote);
+                repository.setLastSyncedAt(syncedAt);
+                synced.add(repository);
+                seenGithubRepoIds.add(repository.getGithubRepoId());
+            }
+            if (pageItems.size() < DEFAULT_SYNC_PAGE_SIZE) {
+                completedFullScan = true;
+                break;
+            }
+        }
+
+        if (completedFullScan) {
+            for (Repository existing : repositoryRepository.findByOwnerIdAndIsActiveTrue(user.getId())) {
+                if (!seenGithubRepoIds.contains(existing.getGithubRepoId())) {
+                    existing.setIsActive(false);
+                    existing.setLastSyncedAt(syncedAt);
+                    repositoryRepository.save(existing);
+                }
+            }
+        }
+        return synced;
+    }
+
     public List<Map<String, Object>> getPullRequests(User user, Repository repository, int page, int perPage) {
         validatePage(page, perPage);
         ConnectedGitHubAccount account = getConnectedAccount(user);
         String token = encryptionService.decrypt(account.getAccessToken());
-        String[] parts = repository.getFullName().split("/", 2);
-        if (parts.length != 2) {
-            throw new IllegalStateException("Repository has an invalid GitHub full name");
-        }
+        String[] parts = splitFullName(repository);
         return gitHubApiClient.getPullRequests(token, parts[0], parts[1], page, perPage);
     }
 
@@ -94,6 +138,31 @@ public class GitHubIntegrationService {
         return getPullRequests(user, repository, page, perPage).stream()
                 .map(remote -> upsertPullRequest(repository, remote))
                 .toList();
+    }
+
+    /**
+     * Paginates through all open, closed, and merged pull requests for a repository.
+     */
+    @Transactional
+    public List<PullRequest> synchronizeAllPullRequests(User user, Repository repository) {
+        ConnectedGitHubAccount account = getConnectedAccount(user);
+        String token = encryptionService.decrypt(account.getAccessToken());
+        String[] parts = splitFullName(repository);
+        List<PullRequest> synced = new ArrayList<>();
+
+        for (int page = 1; page <= MAX_SYNC_PAGES; page++) {
+            List<Map<String, Object>> pageItems = gitHubApiClient.getPullRequests(
+                    token, parts[0], parts[1], page, DEFAULT_SYNC_PAGE_SIZE);
+            for (Map<String, Object> remote : pageItems) {
+                synced.add(upsertPullRequest(repository, remote));
+            }
+            if (pageItems.size() < DEFAULT_SYNC_PAGE_SIZE) {
+                break;
+            }
+        }
+        repository.setLastSyncedAt(ZonedDateTime.now());
+        repositoryRepository.save(repository);
+        return synced;
     }
 
     @Transactional
@@ -120,7 +189,8 @@ public class GitHubIntegrationService {
         Object rawUser = remote.get("user");
         Object login = rawUser instanceof Map<?, ?> values ? values.get("login") : null;
         pullRequest.setAuthor(login == null ? "unknown" : String.valueOf(login));
-        pullRequest.setStatus(requiredString(remote, "state"));
+        boolean merged = remote.get("merged_at") != null || Boolean.TRUE.equals(remote.get("merged"));
+        pullRequest.setStatus(merged ? "merged" : requiredString(remote, "state"));
         Map<?, ?> base = nestedMap(remote, "base");
         Map<?, ?> head = nestedMap(remote, "head");
         pullRequest.setBaseBranch(stringValue(base, "ref"));
@@ -149,7 +219,11 @@ public class GitHubIntegrationService {
     }
 
     private Repository upsertRepository(User user, Map<String, Object> remote) {
-        String githubRepoId = String.valueOf(remote.get("id"));
+        Object rawId = remote.get("id");
+        if (rawId == null || String.valueOf(rawId).isBlank()) {
+            throw new IllegalArgumentException("GitHub response is missing id");
+        }
+        String githubRepoId = String.valueOf(rawId);
         Repository repository = repositoryRepository.findByGithubRepoIdAndOwnerId(githubRepoId, user.getId())
                 .orElseGet(Repository::new);
         repository.setOwner(user);
@@ -160,7 +234,9 @@ public class GitHubIntegrationService {
         repository.setIsPrivate(Boolean.TRUE.equals(remote.get("private")));
         repository.setDefaultBranch((String) remote.get("default_branch"));
         repository.setHtmlUrl((String) remote.get("html_url"));
-        repository.setIsActive(true);
+        boolean archived = Boolean.TRUE.equals(remote.get("archived"));
+        boolean disabled = Boolean.TRUE.equals(remote.get("disabled"));
+        repository.setIsActive(!archived && !disabled);
         return repositoryRepository.save(repository);
     }
 
@@ -181,17 +257,27 @@ public class GitHubIntegrationService {
     public Map<String, Object> getPullRequestDetails(User user, Repository repository, int prNumber) {
         ConnectedGitHubAccount account = getConnectedAccount(user);
         String decryptedToken = encryptionService.decrypt(account.getAccessToken());
-        String owner = repository.getFullName().split("/")[0];
-        String repoName = repository.getFullName().split("/")[1];
-        return gitHubApiClient.getPullRequest(decryptedToken, owner, repoName, prNumber);
+        String[] parts = splitFullName(repository);
+        return gitHubApiClient.getPullRequest(decryptedToken, parts[0], parts[1], prNumber);
     }
 
     public String getPullRequestDiff(User user, Repository repository, int prNumber) {
         ConnectedGitHubAccount account = getConnectedAccount(user);
         String decryptedToken = encryptionService.decrypt(account.getAccessToken());
-        String owner = repository.getFullName().split("/")[0];
-        String repoName = repository.getFullName().split("/")[1];
-        return gitHubApiClient.getPullRequestDiff(decryptedToken, owner, repoName, prNumber);
+        String[] parts = splitFullName(repository);
+        return gitHubApiClient.getPullRequestDiff(decryptedToken, parts[0], parts[1], prNumber);
+    }
+
+    private String[] splitFullName(Repository repository) {
+        String fullName = repository.getFullName();
+        if (fullName == null) {
+            throw new IllegalStateException("Repository has an invalid GitHub full name");
+        }
+        String[] parts = fullName.split("/", 2);
+        if (parts.length != 2 || parts[0].isBlank() || parts[1].isBlank()) {
+            throw new IllegalStateException("Repository has an invalid GitHub full name");
+        }
+        return parts;
     }
 
     private ConnectedGitHubAccount getConnectedAccount(User user) {

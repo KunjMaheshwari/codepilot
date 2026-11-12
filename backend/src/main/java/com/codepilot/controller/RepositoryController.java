@@ -53,7 +53,7 @@ public class RepositoryController {
     public PageDto<RepositoryDto> synchronizeRepositories(
             @PageableDefault(size = 100) Pageable pageable) {
         User user = repositoryService.getAuthenticatedUser();
-        gitHubIntegrationService.synchronizeRepositories(user, pageable.getPageNumber() + 1, pageable.getPageSize());
+        gitHubIntegrationService.synchronizeAllRepositories(user);
         return repositoryService.getRepositories(pageable);
     }
 
@@ -61,6 +61,15 @@ public class RepositoryController {
     public PageDto<PullRequestDto> getRepositoryPullRequests(
             @PathVariable UUID id,
             @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
+        return pullRequestService.getPullRequestsForRepository(id, pageable);
+    }
+
+    @PostMapping("/{id}/pull-requests/sync")
+    public PageDto<PullRequestDto> synchronizePullRequests(
+            @PathVariable UUID id,
+            @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
+        User user = repositoryService.getAuthenticatedUser();
+        gitHubIntegrationService.synchronizeAllPullRequests(user, repositoryService.getOwnedRepository(id));
         return pullRequestService.getPullRequestsForRepository(id, pageable);
     }
 

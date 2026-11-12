@@ -6,12 +6,14 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.EntityGraph;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 @org.springframework.stereotype.Repository
 public interface RepositoryRepository extends JpaRepository<Repository, UUID> {
     Page<Repository> findByOwnerId(UUID ownerId, Pageable pageable);
+    List<Repository> findByOwnerIdAndIsActiveTrue(UUID ownerId);
     Optional<Repository> findByIdAndOwnerId(UUID id, UUID ownerId);
     Optional<Repository> findByGithubRepoId(String githubRepoId);
     @EntityGraph(attributePaths = "owner")

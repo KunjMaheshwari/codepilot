@@ -1,32 +1,46 @@
 package com.codepilot.config;
 
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.web.config.PageableHandlerMethodArgumentResolverCustomizer;
+import org.springframework.web.client.RestTemplate;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
-import org.springframework.data.web.config.PageableHandlerMethodArgumentResolverCustomizer;
+
+import java.util.List;
 
 @Configuration
 public class WebConfig implements WebMvcConfigurer {
 
-    @org.springframework.context.annotation.Bean
-    public org.springframework.web.client.RestTemplate restTemplate() {
-        return new org.springframework.web.client.RestTemplate();
+    @Value("${codepilot.cors.allowed-origins:http://localhost:3000}")
+    private List<String> allowedOrigins;
+
+    @Bean
+    public RestTemplate restTemplate() {
+        return new RestTemplate();
     }
 
-    @org.springframework.context.annotation.Bean
+    @Bean
     public PageableHandlerMethodArgumentResolverCustomizer pageableCustomizer() {
         return resolver -> {
             resolver.setMaxPageSize(100);
-            resolver.setFallbackPageable(org.springframework.data.domain.PageRequest.of(0, 20));
+            resolver.setFallbackPageable(PageRequest.of(0, 20));
         };
     }
 
     @Override
     public void addCorsMappings(CorsRegistry registry) {
+        String[] trustedOrigins = allowedOrigins.stream()
+                .map(String::trim)
+                .filter(origin -> !origin.isBlank() && !"*".equals(origin))
+                .toArray(String[]::new);
+
         registry.addMapping("/**")
-                .allowedOrigins("http://localhost:3000")
-                .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-                .allowedHeaders("*")
+                .allowedOrigins(trustedOrigins)
+                .allowedMethods("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
+                .allowedHeaders("Content-Type", "X-XSRF-TOKEN", "Authorization", "Accept")
                 .allowCredentials(true);
     }
 }

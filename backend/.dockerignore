@@ -1,0 +1,12 @@
+target/
+.git/
+.gitignore
+*.log
+*.iml
+.idea/
+.vscode/
+.env
+.env.*
+mvn_output*.log
+codepilot*.log
+

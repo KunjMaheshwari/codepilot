@@ -1,11 +1,21 @@
 spring:
   application:
     name: codepilot
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
   datasource:
     url: ${DB_URL}
     username: ${DB_USERNAME}
     password: ${DB_PASSWORD}
     driver-class-name: org.postgresql.Driver
+    hikari:
+      pool-name: codepilot-hikari
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:10}
+      minimum-idle: ${DB_POOL_MIN_IDLE:2}
+      connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:5000}
+      validation-timeout: ${DB_VALIDATION_TIMEOUT_MS:3000}
+      idle-timeout: ${DB_IDLE_TIMEOUT_MS:300000}
+      max-lifetime: ${DB_MAX_LIFETIME_MS:1800000}
   jpa:
     hibernate:
       ddl-auto: validate
@@ -24,6 +34,8 @@ spring:
       password: ${REDIS_PASSWORD:}
       connect-timeout: ${REDIS_CONNECT_TIMEOUT:2s}
       timeout: ${REDIS_TIMEOUT:5s}
+      repositories:
+        enabled: false
   security:
     oauth2:
       client:
@@ -40,20 +52,35 @@ springdoc:
     path: /swagger-ui.html
 
 codepilot:
+  frontend:
+    url: ${FRONTEND_URL:http://localhost:3000}
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
+  security:
+    swagger-public: ${CODEPILOT_SWAGGER_PUBLIC:false}
+    cookie-secure: ${COOKIE_SECURE:false}
+    cookie-same-site: ${COOKIE_SAME_SITE:Lax}
+    rate-limit:
+      enabled: ${CODEPILOT_RATE_LIMIT_ENABLED:true}
+      auth-requests-per-minute: ${CODEPILOT_AUTH_RATE_LIMIT:60}
+      webhook-requests-per-minute: ${CODEPILOT_WEBHOOK_RATE_LIMIT:300}
   encryption:
     key: ${ENCRYPTION_KEY}
   review:
+    publish-comments-enabled: ${CODEPILOT_REVIEW_PUBLISH_COMMENTS_ENABLED:false}
     max-file-bytes: ${CODEPILOT_REVIEW_MAX_FILE_BYTES:102400}
     max-diff-bytes: ${CODEPILOT_REVIEW_MAX_DIFF_BYTES:2097152}
     async:
       enabled: ${CODEPILOT_REVIEW_ASYNC_ENABLED:true}
       queue: ${CODEPILOT_REVIEW_QUEUE:codepilot:review-jobs}
       processing-queue: ${CODEPILOT_REVIEW_PROCESSING_QUEUE:codepilot:review-jobs:processing}
+      retry-queue: ${CODEPILOT_REVIEW_RETRY_QUEUE:codepilot:review-jobs:retry}
       dead-letter-queue: ${CODEPILOT_REVIEW_DEAD_LETTER_QUEUE:codepilot:review-jobs:dead-letter}
       max-attempts: ${CODEPILOT_REVIEW_MAX_ATTEMPTS:3}
       worker-delay-ms: ${CODEPILOT_REVIEW_WORKER_DELAY_MS:1000}
       heartbeat-interval-ms: ${CODEPILOT_REVIEW_HEARTBEAT_INTERVAL_MS:10000}
       processing-timeout-seconds: ${CODEPILOT_REVIEW_PROCESSING_TIMEOUT_SECONDS:900}
+      queued-recovery-seconds: ${CODEPILOT_REVIEW_QUEUED_RECOVERY_SECONDS:60}
   webhook:
     max-payload-bytes: ${CODEPILOT_WEBHOOK_MAX_PAYLOAD_BYTES:1048576}
     max-attempts: ${CODEPILOT_WEBHOOK_MAX_ATTEMPTS:5}
@@ -64,8 +91,35 @@ gemini:
   api:
     key: ${GEMINI_API_KEY}
     url: ${GEMINI_API_URL:https://generativelanguage.googleapis.com}
-    model: ${GEMINI_API_MODEL:gemini-1.5-pro}
+    model: ${GEMINI_API_MODEL:gemini-2.5-flash}
 
 github:
   webhook:
     secret: ${GITHUB_WEBHOOK_SECRET:}
+
+server:
+  forward-headers-strategy: ${FORWARD_HEADERS_STRATEGY:framework}
+  shutdown: graceful
+  servlet:
+    session:
+      timeout: ${SESSION_TIMEOUT:30m}
+      cookie:
+        http-only: true
+        secure: ${COOKIE_SECURE:false}
+        same-site: ${COOKIE_SAME_SITE:Lax}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: ${ACTUATOR_HEALTH_SHOW_DETAILS:never}
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true

@@ -180,4 +180,69 @@ class GitHubIntegrationServiceTest {
         assertThat(existing.getIsPrivate()).isTrue();
         verify(repositoryRepository).save(existing);
     }
+
+    @Test
+    void synchronizeAllRepositoriesMarksArchivedAndMissingRepositoriesInactive() {
+        Repository removed = new Repository();
+        removed.setId(UUID.randomUUID());
+        removed.setGithubRepoId("999");
+        removed.setIsActive(true);
+
+        when(connectedGitHubAccountRepository.findByUserId(testUser.getId()))
+                .thenReturn(Optional.of(connectedAccount));
+        when(encryptionService.decrypt("test-token")).thenReturn("decrypted-token");
+        when(gitHubApiClient.getUserRepositories("decrypted-token", 1, 100))
+                .thenReturn(List.of(Map.of(
+                        "id", 42,
+                        "name", "archived-repo",
+                        "full_name", "owner/archived-repo",
+                        "private", false,
+                        "archived", true,
+                        "default_branch", "main",
+                        "html_url", "https://github.com/owner/archived-repo")));
+        when(repositoryRepository.findByGithubRepoIdAndOwnerId("42", testUser.getId()))
+                .thenReturn(Optional.empty());
+        when(repositoryRepository.findByOwnerIdAndIsActiveTrue(testUser.getId()))
+                .thenReturn(List.of(removed));
+        when(repositoryRepository.save(any(Repository.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        List<Repository> result = gitHubIntegrationService.synchronizeAllRepositories(testUser);
+
+        assertThat(result).singleElement().satisfies(repo -> {
+            assertThat(repo.getGithubRepoId()).isEqualTo("42");
+            assertThat(repo.getIsActive()).isFalse();
+        });
+        assertThat(removed.getIsActive()).isFalse();
+        verify(repositoryRepository).save(removed);
+    }
+
+    @Test
+    void synchronizeAllPullRequestsMarksMergedPullRequestAsMerged() {
+        when(connectedGitHubAccountRepository.findByUserId(testUser.getId()))
+                .thenReturn(Optional.of(connectedAccount));
+        when(encryptionService.decrypt("test-token")).thenReturn("decrypted-token");
+        when(gitHubApiClient.getPullRequests("decrypted-token", "owner", "repo", 1, 100))
+                .thenReturn(List.of(Map.of(
+                        "number", 12,
+                        "title", "Merged PR",
+                        "state", "closed",
+                        "merged_at", "2026-01-01T00:00:00Z",
+                        "user", Map.of("login", "author"),
+                        "base", Map.of("ref", "main", "sha", "base-sha"),
+                        "head", Map.of("ref", "feat", "sha", "head-sha"))));
+        when(pullRequestRepository.findByRepositoryIdAndPrNumber(testRepository.getId(), 12))
+                .thenReturn(Optional.empty());
+        when(pullRequestRepository.save(any(PullRequest.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(repositoryRepository.save(any(Repository.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        List<PullRequest> result = gitHubIntegrationService.synchronizeAllPullRequests(testUser, testRepository);
+
+        assertThat(result).singleElement().satisfies(pr -> {
+            assertThat(pr.getPrNumber()).isEqualTo(12);
+            assertThat(pr.getStatus()).isEqualTo("merged");
+        });
+    }
 }

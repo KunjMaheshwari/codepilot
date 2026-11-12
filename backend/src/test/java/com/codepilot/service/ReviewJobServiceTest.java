@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -60,5 +61,21 @@ class ReviewJobServiceTest {
         assertThat(job.getStatus()).isEqualTo("RETRYING");
         assertThat(job.getLastErrorCategory()).isEqualTo("TIMEOUT");
         verify(repository).save(job);
+    }
+
+    @Test
+    void terminalJobCannotTransitionBackToActiveStates() {
+        ReviewJobService service = new ReviewJobService(repository);
+        ReviewJob completed = new ReviewJob();
+        completed.setStatus("COMPLETED");
+
+        assertThatThrownBy(() -> service.updateStatus(completed, "PROCESSING"))
+                .isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> service.markPending(completed))
+                .isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> service.markQueued(completed))
+                .isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> service.markRetrying(completed, "retry"))
+                .isInstanceOf(IllegalStateException.class);
     }
 }

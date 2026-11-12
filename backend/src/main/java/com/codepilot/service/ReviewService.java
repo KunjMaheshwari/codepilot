@@ -59,7 +59,7 @@ public class ReviewService {
         User user = repositoryService.getAuthenticatedUser();
         Review review = reviewRepository.findByIdAndPullRequestRepositoryOwnerId(id, user.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("Review", "id", id));
-        return new ReviewDto(review);
+        return toReviewDto(review);
     }
 
     @Transactional(readOnly = true)
@@ -84,6 +84,12 @@ public class ReviewService {
         if (!pullRequest.getRepository().getId().equals(repository.getId())) {
             throw new IllegalArgumentException("PullRequest does not belong to the specified Repository");
         }
+        if (Boolean.FALSE.equals(repository.getIsActive())) {
+            throw new IllegalArgumentException("Inactive or archived repositories cannot be reviewed");
+        }
+        if (!"open".equalsIgnoreCase(pullRequest.getStatus())) {
+            throw new IllegalArgumentException("Only open pull requests can be reviewed");
+        }
 
         return createReview(user, repository, pullRequest);
     }
@@ -99,7 +105,7 @@ public class ReviewService {
         if (activeReview.isPresent()
                 && (pullRequest.getHeadSha() == null
                 || pullRequest.getHeadSha().equals(activeReview.get().getHeadSha()))) {
-            return new ReviewDto(activeReview.get());
+            return toReviewDto(activeReview.get());
         }
         if (pullRequest.getHeadSha() != null) {
             java.util.Optional<Review> existingRevision = reviewRepository
@@ -107,7 +113,7 @@ public class ReviewService {
                             pullRequest.getId(), pullRequest.getHeadSha(),
                             List.of("QUEUED", "PROCESSING", "COMPLETED", "PARTIAL"));
             if (existingRevision.isPresent()) {
-                return new ReviewDto(existingRevision.get());
+                return toReviewDto(existingRevision.get());
             }
         }
 
@@ -120,8 +126,10 @@ public class ReviewService {
         }
         review = reviewRepository.save(review);
 
+        UUID jobId = null;
         if (asyncEnabled) {
             ReviewJob job = reviewJobService.createJob(review);
+            jobId = job.getId();
             if (TransactionSynchronizationManager.isSynchronizationActive()) {
                 TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                     @Override
@@ -136,7 +144,14 @@ public class ReviewService {
             processReview(review, pullRequest, repository, user);
         }
 
-        return new ReviewDto(review);
+        return new ReviewDto(review, jobId);
+    }
+
+    private ReviewDto toReviewDto(Review review) {
+        UUID jobId = reviewJobService.findByReviewId(review.getId())
+                .map(ReviewJob::getId)
+                .orElse(null);
+        return new ReviewDto(review, jobId);
     }
 
     @Transactional(readOnly = true)
