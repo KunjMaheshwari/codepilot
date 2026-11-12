@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect } from "react";
-import { Button } from "@/components/ui/button";
 import { AlertCircle } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 export default function Error({
   error,
@@ -16,15 +16,17 @@ export default function Error({
   }, [error]);
 
   return (
-    <div className="flex h-[80vh] w-full flex-col items-center justify-center gap-4">
-      <AlertCircle className="h-10 w-10 text-destructive" />
-      <div className="flex flex-col items-center text-center">
-        <h2 className="text-2xl font-bold tracking-tight">Something went wrong!</h2>
-        <p className="text-sm text-muted-foreground mt-2">
-          We encountered an error while loading your dashboard data.
+    <div className="flex min-h-[60vh] w-full flex-col items-center justify-center gap-4 rounded-lg border border-dashed bg-card p-8 text-center">
+      <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-destructive/30 bg-destructive/10 text-destructive">
+        <AlertCircle className="h-5 w-5" />
+      </div>
+      <div className="space-y-1.5">
+        <h2 className="text-lg font-semibold tracking-tight">Unable to load workspace view</h2>
+        <p className="max-w-md text-sm text-muted-foreground">
+          An unexpected error occurred while rendering this page. You can retry loading the view.
         </p>
       </div>
-      <Button onClick={() => reset()} variant="default">
+      <Button onClick={() => reset()} size="sm">
         Try again
       </Button>
     </div>

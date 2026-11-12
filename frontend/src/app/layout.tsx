@@ -1,13 +1,19 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme/theme-provider";
+import { ToastProvider } from "@/components/ui/toast";
 
-const inter = Inter({ subsets: ["latin"] });
+const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-jetbrains-mono",
+});
 
 export const metadata: Metadata = {
-  title: "CodePilot - AI Code Review SaaS",
-  description: "Production-quality AI Code Review tool.",
+  title: "CodePilot — AI Pull Request Review Platform",
+  description:
+    "Evidence-based AI code reviews for GitHub Pull Requests with strict diff scoping and idempotent review delivery.",
 };
 
 export default function RootLayout({
@@ -17,14 +23,16 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${inter.className} min-h-screen antialiased`}>
+      <body
+        className={`${inter.variable} ${jetbrainsMono.variable} min-h-screen font-sans antialiased`}
+      >
         <ThemeProvider
           attribute="class"
           defaultTheme="system"
           enableSystem
           disableTransitionOnChange
         >
-          {children}
+          <ToastProvider>{children}</ToastProvider>
         </ThemeProvider>
       </body>
     </html>

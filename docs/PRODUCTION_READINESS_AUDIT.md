@@ -408,3 +408,33 @@ While the repository has a clean architectural skeleton (Spring Boot 3.2.3 API +
 ### Updated Production-Readiness Assessment
 - **AI Review Engine & GitHub Comment Publishing**: Hardened for structured output, prompt-injection isolation, bounded retries, idempotent comment publication, and timeout reconciliation.
 - **Overall Status**: Core backend build, database migrations (V1–V7), Redis async worker, OAuth/CSRF/tenant security, repo/PR sync, manual review flow, and AI/GitHub publishing are verified; containerization and CI/CD remain for Phase 8.
+
+---
+
+## 15. Phase 8 Remediation Update (Complete Frontend Redesign & Experience)
+
+### Redesigned Pages & Layouts
+- **Landing Page (`frontend/src/app/page.tsx`)**: Replaced generic marketing copy and dead links with a restrained, developer-focused landing page featuring CodePilot's real architecture, an example diff-anchored finding preview, a 3-step engineering workflow, security/tenant-isolation guarantees, and direct GitHub OAuth sign-in.
+- **Workspace Shell (`frontend/src/app/dashboard/layout.tsx`, `loading.tsx`, `error.tsx`, `sidebar.tsx`, `header.tsx`)**: Unified desktop sidebar and mobile `Sheet` navigation, added route-aware header titles, fetched authenticated user profile (`api.getMe()`) for the account menu, removed dead notification icons, and added matching skeleton/error recovery views.
+- **Main Dashboard (`frontend/src/components/dashboard/dashboard-client.tsx`, `stats.tsx`, `activity-chart.tsx`, `recent-reviews.tsx`)**: Redesigned KPI tiles with tabular monospace figures, fixed responsive `lg:col-span-7` / `lg:col-span-5` layout, added empty state for 7-day activity, and linked recent reviews directly to `/dashboard/reviews?reviewId=...`.
+- **Repositories & Pull Requests (`frontend/src/app/dashboard/repositories/page.tsx`)**: Implemented a master-detail workspace with repository search, active/inactive filtering, PR status filtering (`all`/`open`/`closed`/`merged`), duplicate-click prevention, disabled states for non-open PRs or inactive repositories, and direct links to inspect newly queued reviews.
+- **Reviews & Findings (`frontend/src/app/dashboard/reviews/page.tsx`)**: Built a split-pane code-review workspace with review status filtering, ID search, automatic 5s job polling, automatic findings loading for `COMPLETED`/`PARTIAL` reviews, clickable severity breakdown pills (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `INFO`), `Previous`/`Next` finding navigation, and structured evidence/impact/suggested-fix blocks.
+- **Settings (`frontend/src/app/dashboard/settings/page.tsx`)**: Displays authenticated account metadata (`username`, `email`), GitHub connection status, a confirmation `Dialog` before disconnecting GitHub (`api.disconnectGitHub()`), and explicit `Sign out` (`api.logout()`).
+
+### Design System Components Added
+- `frontend/src/app/globals.css` & `frontend/src/app/layout.tsx`: Added `Inter` (`--font-inter`) and `JetBrains_Mono` (`--font-jetbrains-mono`), refined neutral slate surface/border tokens, and wired `ToastProvider`.
+- `frontend/src/components/ui/input.tsx`: Styled text input primitive.
+- `frontend/src/components/ui/skeleton.tsx`: Loading skeleton primitive.
+- `frontend/src/components/ui/status-badge.tsx`: Semantic status and severity badge component.
+- `frontend/src/components/ui/toast.tsx`: Accessible non-blocking toast notification provider (`useToast`).
+- `frontend/src/components/ui/empty-state.tsx`: Shared `EmptyState` and retryable `ErrorBanner` components.
+
+### Verification Results
+- **`cd frontend && npm run lint`**: Passed (0 errors, 0 warnings).
+- **`cd frontend && npx tsc --noEmit`**: Passed (0 TypeScript errors).
+- **`cd frontend && npm run build`**: Passed (`next build` compiled and generated all routes `/`, `/dashboard`, `/dashboard/repositories`, `/dashboard/reviews`, `/dashboard/settings`).
+- **Backend**: Unchanged in Phase 8 (100/100 backend unit + Testcontainers integration tests passed at the end of Phase 7).
+
+### Remaining Frontend Limitations
+- No automated frontend unit or Playwright E2E test suite is configured in `frontend/package.json` yet; UI verification in Phase 8 covers ESLint, TypeScript typechecking, and production Next.js build compilation.
+- Live browser walkthroughs against a running backend + GitHub OAuth app require runtime OAuth credentials.
