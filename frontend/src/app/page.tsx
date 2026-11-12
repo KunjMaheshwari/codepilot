@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Bot, ArrowRight, CheckCircle2, Shield, Zap } from "lucide-react";
 import { GitBranch } from "lucide-react";
+import { githubLoginUrl } from "@/lib/api";
 
 export default function Home() {
   return (
@@ -33,14 +34,16 @@ export default function Home() {
                 </p>
               </div>
               <div className="space-x-4">
-                <Link href="/dashboard">
+                <Link href={githubLoginUrl}>
                   <Button className="h-11 px-8">
-                    Go to Dashboard <ArrowRight className="ml-2 h-4 w-4" />
+                    Sign in with GitHub <ArrowRight className="ml-2 h-4 w-4" />
                   </Button>
                 </Link>
-                <Button variant="outline" className="h-11 px-8 cursor-not-allowed opacity-50" disabled>
-                  <GitBranch className="mr-2 h-4 w-4" /> Sign in with GitHub
-                </Button>
+                <Link href="/dashboard">
+                  <Button variant="outline" className="h-11 px-8">
+                    <GitBranch className="mr-2 h-4 w-4" /> Open dashboard
+                  </Button>
+                </Link>
               </div>
             </div>
           </div>
