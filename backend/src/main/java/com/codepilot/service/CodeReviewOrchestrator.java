@@ -33,37 +33,44 @@ public class CodeReviewOrchestrator {
     }
 
     public void orchestrateReview(ReviewJob job) {
-        log.info("Starting review orchestration for job ID: {}", job.getId());
+        log.info("Starting review orchestration for job ID: {} correlationId={}",
+                job.getId(), job.getCorrelationId());
         try {
             Review review = job.getReview();
             PullRequest pr = review.getPullRequest();
 
-            reviewJobService.updateStatus(job, "IN_PROGRESS");
+            reviewJobService.updateStatus(job, "PROCESSING");
 
             String diff = githubService.getPullRequestDiff(pr.getRepository().getOwner(), pr.getRepository(), pr.getPrNumber());
             List<DiffParser.ParsedFile> parsedFiles = diffParser.parseDiff(diff);
 
             if (parsedFiles == null || parsedFiles.isEmpty()) {
-                review.setStatus("COMPLETED");
-                reviewRepository.save(review);
-                reviewJobService.updateStatus(job, "COMPLETED");
-                return;
+                throw new IllegalStateException("Pull request diff is empty or unavailable");
             }
 
-            List<ReviewFinding> findings = reviewProvider.reviewDiff(diff, parsedFiles);
+            List<DiffParser.ParsedFile> reviewableFiles = parsedFiles.stream()
+                    .filter(DiffParser.ParsedFile::isReviewable)
+                    .toList();
+            if (reviewableFiles.isEmpty()) {
+                throw new IllegalStateException("Pull request diff has no reviewable source files");
+            }
+
+            List<ReviewFinding> findings = reviewProvider.reviewDiff(diff, reviewableFiles);
 
             if (findings != null && !findings.isEmpty()) {
                 findings.forEach(f -> f.setReview(review));
                 findingRepository.saveAll(findings);
             }
 
-            review.setStatus("COMPLETED");
+            review.setStatus(reviewableFiles.size() == parsedFiles.size() ? "COMPLETED" : "PARTIAL");
             reviewRepository.save(review);
 
-            reviewJobService.updateStatus(job, "COMPLETED");
-            log.info("Review orchestration completed successfully for job ID: {}", job.getId());
+            reviewJobService.updateStatus(job, review.getStatus());
+            log.info("Review orchestration completed successfully for job ID: {} correlationId={}",
+                    job.getId(), job.getCorrelationId());
         } catch (Exception e) {
-            log.error("Failed to orchestrate review for job ID: {}", job.getId(), e);
+            log.error("Failed to orchestrate review for job ID: {} correlationId={}",
+                    job.getId(), job.getCorrelationId(), e);
             reviewJobService.markFailed(job, e.getMessage());
 
             Review review = job.getReview();

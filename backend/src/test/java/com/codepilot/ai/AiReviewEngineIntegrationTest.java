@@ -144,7 +144,7 @@ class AiReviewEngineIntegrationTest {
                   "content": {
                     "parts": [
                       {
-                        "text": "[{\\"title\\": \\"Bad variable\\", \\"description\\": \\"Use better name\\", \\"category\\": \\"CODE_QUALITY\\", \\"severity\\": \\"LOW\\", \\"filePath\\": \\"src/Test.java\\", \\"lineNumber\\": 2, \\"evidence\\": \\"int x;\\"}]"
+                        "text": "[{\\"title\\": \\"Bad variable\\", \\"description\\": \\"Use better name\\", \\"category\\": \\"CODE_QUALITY\\", \\"severity\\": \\"LOW\\", \\"filePath\\": \\"src/Test.java\\", \\"lineNumber\\": 2, \\"evidence\\": \\"int x;\\", \\"impact\\": \\"Confusing code\\", \\"suggestedFix\\": \\"Use a descriptive name\\", \\"confidence\\": \\"HIGH\\"}]"
                       }
                     ]
                   }
@@ -235,6 +235,12 @@ class AiReviewEngineIntegrationTest {
             """;
         when(gitHubIntegrationService.getPullRequestDiff(any(), any(), eq(1))).thenReturn(diff);
 
+        mockServer.expect(ExpectedCount.once(), requestTo("http://mock/v1beta/models/mock:generateContent"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withStatus(HttpStatus.INTERNAL_SERVER_ERROR));
+        mockServer.expect(ExpectedCount.once(), requestTo("http://mock/v1beta/models/mock:generateContent"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withStatus(HttpStatus.INTERNAL_SERVER_ERROR));
         mockServer.expect(ExpectedCount.once(), requestTo("http://mock/v1beta/models/mock:generateContent"))
                 .andExpect(method(HttpMethod.POST))
                 .andRespond(withStatus(HttpStatus.INTERNAL_SERVER_ERROR));

@@ -19,6 +19,12 @@ spring:
 codepilot:
   encryption:
     key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  review:
+    max-file-bytes: 102400
+    max-diff-bytes: 2097152
+    async:
+      enabled: false
+      processing-timeout-seconds: 900
 gemini:
   api:
     key: "mock-key"

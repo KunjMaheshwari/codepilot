@@ -31,7 +31,7 @@ public class ReviewJob {
     private UUID id;
 
     @OneToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "review_id", nullable = false)
+    @JoinColumn(name = "review_id", nullable = false, unique = true)
     private Review review;
 
     @Column(nullable = false, length = 50)
@@ -39,6 +39,19 @@ public class ReviewJob {
 
     @Column(columnDefinition = "TEXT")
     private String errorMessage;
+
+    @Column(nullable = false)
+    private Integer attemptCount = 0;
+
+    private ZonedDateTime startedAt;
+    private ZonedDateTime completedAt;
+    private ZonedDateTime processingHeartbeatAt;
+
+    @Column(length = 50)
+    private String lastErrorCategory;
+
+    @Column(length = 100)
+    private String correlationId;
 
     @CreationTimestamp
     @Column(nullable = false, updatable = false)

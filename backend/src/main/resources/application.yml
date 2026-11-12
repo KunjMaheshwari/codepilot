@@ -2,9 +2,9 @@ spring:
   application:
     name: codepilot
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/codepilot}
-    username: ${DB_USERNAME:postgres}
-    password: ${DB_PASSWORD:postgres}
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
@@ -16,13 +16,21 @@ spring:
     enabled: true
     baseline-on-migrate: true
     locations: classpath:db/migration
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      username: ${REDIS_USERNAME:}
+      password: ${REDIS_PASSWORD:}
+      connect-timeout: ${REDIS_CONNECT_TIMEOUT:2s}
+      timeout: ${REDIS_TIMEOUT:5s}
   security:
     oauth2:
       client:
         registration:
           github:
-            client-id: ${GITHUB_CLIENT_ID:change-me}
-            client-secret: ${GITHUB_CLIENT_SECRET:change-me}
+            client-id: ${GITHUB_CLIENT_ID}
+            client-secret: ${GITHUB_CLIENT_SECRET}
             scope: user:email,repo
 
 springdoc:
@@ -33,4 +41,31 @@ springdoc:
 
 codepilot:
   encryption:
-    key: ${ENCRYPTION_KEY:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+    key: ${ENCRYPTION_KEY}
+  review:
+    max-file-bytes: ${CODEPILOT_REVIEW_MAX_FILE_BYTES:102400}
+    max-diff-bytes: ${CODEPILOT_REVIEW_MAX_DIFF_BYTES:2097152}
+    async:
+      enabled: ${CODEPILOT_REVIEW_ASYNC_ENABLED:true}
+      queue: ${CODEPILOT_REVIEW_QUEUE:codepilot:review-jobs}
+      processing-queue: ${CODEPILOT_REVIEW_PROCESSING_QUEUE:codepilot:review-jobs:processing}
+      dead-letter-queue: ${CODEPILOT_REVIEW_DEAD_LETTER_QUEUE:codepilot:review-jobs:dead-letter}
+      max-attempts: ${CODEPILOT_REVIEW_MAX_ATTEMPTS:3}
+      worker-delay-ms: ${CODEPILOT_REVIEW_WORKER_DELAY_MS:1000}
+      heartbeat-interval-ms: ${CODEPILOT_REVIEW_HEARTBEAT_INTERVAL_MS:10000}
+      processing-timeout-seconds: ${CODEPILOT_REVIEW_PROCESSING_TIMEOUT_SECONDS:900}
+  webhook:
+    max-payload-bytes: ${CODEPILOT_WEBHOOK_MAX_PAYLOAD_BYTES:1048576}
+    max-attempts: ${CODEPILOT_WEBHOOK_MAX_ATTEMPTS:5}
+    retry-delay-seconds: ${CODEPILOT_WEBHOOK_RETRY_DELAY_SECONDS:30}
+    worker-delay-ms: ${CODEPILOT_WEBHOOK_WORKER_DELAY_MS:1000}
+
+gemini:
+  api:
+    key: ${GEMINI_API_KEY}
+    url: ${GEMINI_API_URL:https://generativelanguage.googleapis.com}
+    model: ${GEMINI_API_MODEL:gemini-1.5-pro}
+
+github:
+  webhook:
+    secret: ${GITHUB_WEBHOOK_SECRET:}

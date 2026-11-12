@@ -9,6 +9,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.ZonedDateTime;
 import java.util.UUID;
+import java.util.List;
+import java.util.Optional;
+import java.time.Duration;
 
 @Service
 @RequiredArgsConstructor
@@ -29,19 +32,115 @@ public class ReviewJobService {
         ReviewJob job = new ReviewJob();
         job.setReview(review);
         job.setStatus("PENDING");
+        job.setAttemptCount(0);
+        job.setCorrelationId(UUID.randomUUID().toString());
         return reviewJobRepository.save(job);
     }
 
     @Transactional
     public void updateStatus(ReviewJob job, String status) {
+        if (!isAllowedTransition(job.getStatus(), status)) {
+            throw new IllegalStateException("Invalid review job state transition");
+        }
         job.setStatus(status);
+        if ("COMPLETED".equals(status) || "PARTIAL".equals(status) || "FAILED".equals(status)) {
+            job.setCompletedAt(ZonedDateTime.now());
+            job.setProcessingHeartbeatAt(null);
+        }
         reviewJobRepository.save(job);
     }
 
     @Transactional
     public void markFailed(ReviewJob job, String reason) {
         job.setStatus("FAILED");
-        job.setErrorMessage(reason);
+        job.setErrorMessage(safeReason(reason));
+        job.setLastErrorCategory("PROCESSING");
+        job.setCompletedAt(ZonedDateTime.now());
         reviewJobRepository.save(job);
+    }
+
+    @Transactional
+    public boolean claim(UUID jobId) {
+        return reviewJobRepository.claim(jobId) == 1;
+    }
+
+    @Transactional
+    public int touchProcessingJobs() {
+        return reviewJobRepository.touchProcessingJobs();
+    }
+
+    @Transactional(readOnly = true)
+    public List<ReviewJob> findStaleProcessingJobs(Duration timeout) {
+        return reviewJobRepository.findStaleProcessingJobs(
+                "PROCESSING", ZonedDateTime.now().minus(timeout));
+    }
+
+    @Transactional
+    public void recoverStaleJob(ReviewJob job, int maxAttempts) {
+        if (!"PROCESSING".equals(job.getStatus())) {
+            return;
+        }
+        if (job.getAttemptCount() >= maxAttempts) {
+            job.setStatus("FAILED");
+            job.setLastErrorCategory("TIMEOUT");
+            job.setErrorMessage("Review processing timed out");
+            job.setCompletedAt(ZonedDateTime.now());
+        } else {
+            job.setStatus("RETRYING");
+            job.setLastErrorCategory("TIMEOUT");
+            job.setErrorMessage("Worker stopped before review completed");
+        }
+        reviewJobRepository.save(job);
+    }
+
+    @Transactional
+    public void markQueued(ReviewJob job) {
+        job.setStatus("QUEUED");
+        reviewJobRepository.save(job);
+    }
+
+    @Transactional
+    public void markPending(ReviewJob job) {
+        job.setStatus("PENDING");
+        reviewJobRepository.save(job);
+    }
+
+    @Transactional
+    public void markRetrying(ReviewJob job, String reason) {
+        job.setStatus("RETRYING");
+        job.setErrorMessage(safeReason(reason));
+        job.setLastErrorCategory("RETRYABLE");
+        job.setProcessingHeartbeatAt(null);
+        reviewJobRepository.save(job);
+    }
+
+    @Transactional(readOnly = true)
+    public List<ReviewJob> findPendingJobs() {
+        return reviewJobRepository.findTop50ByStatusOrderByCreatedAtAsc("PENDING");
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<ReviewJob> findByReviewId(UUID reviewId) {
+        return reviewJobRepository.findByReviewId(reviewId);
+    }
+
+    private String safeReason(String reason) {
+        if (reason == null || reason.isBlank()) {
+            return "Review processing failed";
+        }
+        return reason.length() > 500 ? reason.substring(0, 500) : reason;
+    }
+
+    private boolean isAllowedTransition(String current, String next) {
+        if (current != null && current.equals(next)) {
+            return true;
+        }
+        return switch (current) {
+            case "PENDING" -> "QUEUED".equals(next) || "PROCESSING".equals(next);
+            case "QUEUED", "RETRYING" -> "PROCESSING".equals(next);
+            case "PROCESSING" -> "COMPLETED".equals(next)
+                    || "PARTIAL".equals(next) || "FAILED".equals(next);
+            default -> false;
+        };
     }
 }

@@ -44,6 +44,26 @@ class EncryptionServiceTest {
     }
 
     @Test
+    void shouldDecryptLegacyUnversionedCiphertext() {
+        ReflectionTestUtils.setField(encryptionService, "encryptionKeyHex", VALID_KEY);
+        encryptionService.init();
+
+        String versionedCiphertext = encryptionService.encrypt("legacy-token");
+        String legacyCiphertext = versionedCiphertext.substring("v2:".length());
+
+        assertThat(encryptionService.decrypt(legacyCiphertext)).isEqualTo("legacy-token");
+    }
+
+    @Test
+    void shouldRejectMissingEncryptionKey() {
+        ReflectionTestUtils.setField(encryptionService, "encryptionKeyHex", null);
+
+        assertThatThrownBy(() -> encryptionService.init())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Encryption key must be a 64-character hex string");
+    }
+
+    @Test
     void shouldThrowExceptionForInvalidKeyLength() {
         ReflectionTestUtils.setField(encryptionService, "encryptionKeyHex", "invalid_length");
 
@@ -60,5 +80,19 @@ class EncryptionServiceTest {
         assertThatThrownBy(() -> encryptionService.decrypt("corruptedBase64=="))
                 .isInstanceOf(RuntimeException.class)
                 .hasMessageContaining("Failed to decrypt data");
+    }
+
+    @Test
+    void shouldRejectTamperedCiphertext() {
+        ReflectionTestUtils.setField(encryptionService, "encryptionKeyHex", VALID_KEY);
+        encryptionService.init();
+
+        String encrypted = encryptionService.encrypt("token");
+        String tampered = encrypted.substring(0, encrypted.length() - 1)
+                + (encrypted.endsWith("A") ? "B" : "A");
+
+        assertThatThrownBy(() -> encryptionService.decrypt(tampered))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Failed to decrypt data");
     }
 }

@@ -1,9 +1,7 @@
 package com.codepilot.ai;
 
-import lombok.Builder;
 import lombok.Data;
 import org.springframework.stereotype.Component;
-import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -11,80 +9,179 @@ import java.util.List;
 @Component
 public class DiffParser {
 
-    private static final int MAX_FILE_SIZE = 100 * 1024; // 100 KB rough limit
+    @org.springframework.beans.factory.annotation.Value("${codepilot.review.max-file-bytes:102400}")
+    private int maxFileSize = 100 * 1024;
+
+    @org.springframework.beans.factory.annotation.Value("${codepilot.review.max-diff-bytes:2097152}")
+    private int maxDiffSize = 2 * 1024 * 1024;
 
     public List<ParsedFile> parseDiff(String diffContent) {
-        List<ParsedFile> parsedFiles = new ArrayList<>();
-        if (!StringUtils.hasText(diffContent)) {
-            return parsedFiles;
+        if (diffContent == null || diffContent.isBlank()) {
+            return List.of();
+        }
+        if (diffContent.length() > maxDiffSize) {
+            throw new IllegalArgumentException("Pull request diff exceeds the review size limit");
         }
 
-        String[] lines = diffContent.split("\n");
-        ParsedFile currentFile = null;
-        StringBuilder currentContent = new StringBuilder();
-        int currentLineNumber = 0;
+        List<ParsedFile> files = new ArrayList<>();
+        ParsedFile current = null;
+        int newLine = 0;
+        int oldLine = 0;
+        boolean sawHunk = false;
+        String[] lines = diffContent.split("\\R", -1);
 
         for (String line : lines) {
-            if (line.startsWith("diff --git")) {
-                if (currentFile != null) {
-                    currentFile.setDiffContent(currentContent.toString());
-                    if (isSafeToReview(currentFile)) {
-                        parsedFiles.add(currentFile);
-                    }
+            if (line.startsWith("diff --git ")) {
+                current = finish(current, files);
+                current = new ParsedFile();
+                current.setDiffContent(new StringBuilder());
+                String[] paths = line.substring("diff --git ".length()).split(" ");
+                if (paths.length >= 2) {
+                    current.setOldFilePath(stripPrefix(paths[0], "a/"));
+                    current.setFilePath(stripPrefix(paths[1], "b/"));
                 }
-                currentFile = new ParsedFile();
-                currentContent = new StringBuilder();
-            } else if (line.startsWith("+++ b/")) {
-                if (currentFile != null) {
-                    currentFile.setFilePath(line.substring(6));
+                continue;
+            }
+            if (current == null) {
+                continue;
+            }
+            current.getDiffContent().append(line).append('\n');
+            if (line.startsWith("GIT binary patch") || line.equals("Binary files differ")) {
+                current.setBinary(true);
+                continue;
+            }
+            if (line.startsWith("rename from ")) {
+                current.setRenamed(true);
+                current.setOldFilePath(line.substring("rename from ".length()));
+                continue;
+            }
+            if (line.startsWith("rename to ")) {
+                current.setRenamed(true);
+                current.setFilePath(line.substring("rename to ".length()));
+                continue;
+            }
+            if (line.startsWith("deleted file mode")) {
+                current.setDeleted(true);
+                continue;
+            }
+            if (line.startsWith("new file mode")) {
+                current.setNewFile(true);
+                continue;
+            }
+            if (line.startsWith("--- ")) {
+                String path = line.substring(4);
+                if (!"/dev/null".equals(path) && !path.equals("a/")) {
+                    current.setOldFilePath(stripPrefix(path, "a/"));
                 }
-            } else if (line.startsWith("@@ ")) {
-                try {
-                    String[] parts = line.split(" ");
-                    if (parts.length >= 3 && parts[2].startsWith("+")) {
-                        String[] lineInfo = parts[2].substring(1).split(",");
-                        currentLineNumber = Integer.parseInt(lineInfo[0]) - 1;
-                    }
-                } catch (Exception ignored) {}
-                currentContent.append(line).append("\n");
-            } else if (currentFile != null) {
-                if (!line.startsWith("-") && !line.startsWith("\\ No newline")) {
-                    currentLineNumber++;
-                    if (line.startsWith("+")) {
-                        currentFile.getAddedLines().add(currentLineNumber);
-                    }
+                continue;
+            }
+            if (line.startsWith("+++ ")) {
+                String path = line.substring(4);
+                if (!"/dev/null".equals(path)) {
+                    current.setFilePath(stripPrefix(path, "b/"));
                 }
-                currentContent.append(line).append("\n");
+                continue;
+            }
+            if (line.startsWith("@@")) {
+                Hunk hunk = parseHunk(line);
+                if (hunk == null) {
+                    current.setIncomplete(true);
+                    continue;
+                }
+                oldLine = hunk.oldStart;
+                newLine = hunk.newStart;
+                current.getHunks().add(line);
+                sawHunk = true;
+                continue;
+            }
+            if (line.startsWith("\\ No newline")) {
+                current.setIncomplete(true);
+                continue;
+            }
+            if (!sawHunk || line.isEmpty()) {
+                continue;
+            }
+            char marker = line.charAt(0);
+            if (marker == ' ') {
+                oldLine++;
+                newLine++;
+                current.getChangedLineRanges().add(new LineRange(oldLine, newLine, false, false));
+            } else if (marker == '+') {
+                current.getAddedLines().add(newLine);
+                current.getChangedLineRanges().add(new LineRange(null, newLine, true, false));
+                newLine++;
+            } else if (marker == '-') {
+                current.getRemovedLines().add(oldLine);
+                current.getChangedLineRanges().add(new LineRange(oldLine, null, false, true));
+                oldLine++;
+            } else {
+                current.setIncomplete(true);
             }
         }
-
-        if (currentFile != null) {
-            currentFile.setDiffContent(currentContent.toString());
-            if (isSafeToReview(currentFile)) {
-                parsedFiles.add(currentFile);
-            }
-        }
-
-        return parsedFiles;
+        finish(current, files);
+        files.forEach(file -> file.setReviewable(isReviewable(file)));
+        return files;
     }
 
-    private boolean isSafeToReview(ParsedFile file) {
-        if (file.getFilePath() == null) return false;
-        String lowerPath = file.getFilePath().toLowerCase();
-
-        if (lowerPath.endsWith(".lock") || lowerPath.endsWith(".png") ||
-            lowerPath.endsWith(".jpg") || lowerPath.endsWith(".jar") ||
-            lowerPath.endsWith(".class") || lowerPath.contains("package-lock.json")) {
-            return false;
+    private ParsedFile finish(ParsedFile file, List<ParsedFile> files) {
+        if (file != null && file.getFilePath() != null) {
+            files.add(file);
         }
-
-        return file.getDiffContent().length() <= MAX_FILE_SIZE;
+        return null;
     }
+
+    private boolean isReviewable(ParsedFile file) {
+        if (file.getHunks().isEmpty()) {
+            file.setIncomplete(true);
+        }
+        String path = file.getFilePath() == null ? "" : file.getFilePath().toLowerCase();
+        return !file.isBinary()
+                && !file.isDeleted()
+                && !file.isIncomplete()
+                && file.getDiffContent().length() <= maxFileSize
+                && !path.endsWith(".lock")
+                && !path.endsWith(".png")
+                && !path.endsWith(".jpg")
+                && !path.endsWith(".jpeg")
+                && !path.endsWith(".jar")
+                && !path.endsWith(".class")
+                && !path.contains("package-lock.json");
+    }
+
+    private String stripPrefix(String path, String prefix) {
+        return path.startsWith(prefix) ? path.substring(prefix.length()) : path;
+    }
+
+    private Hunk parseHunk(String line) {
+        try {
+            String header = line.substring(2, line.indexOf(" @@")).trim();
+            String[] ranges = header.split(" ");
+            String[] oldRange = ranges[0].substring(1).split(",");
+            String[] newRange = ranges[1].substring(1).split(",");
+            return new Hunk(Integer.parseInt(oldRange[0]), Integer.parseInt(newRange[0]));
+        } catch (RuntimeException exception) {
+            return null;
+        }
+    }
+
+    private record Hunk(int oldStart, int newStart) {}
+
+    public record LineRange(Integer oldLine, Integer newLine, boolean added, boolean removed) {}
 
     @Data
     public static class ParsedFile {
         private String filePath;
-        private String diffContent;
+        private String oldFilePath;
+        private StringBuilder diffContent = new StringBuilder();
         private List<Integer> addedLines = new ArrayList<>();
+        private List<Integer> removedLines = new ArrayList<>();
+        private List<String> hunks = new ArrayList<>();
+        private List<LineRange> changedLineRanges = new ArrayList<>();
+        private boolean renamed;
+        private boolean newFile;
+        private boolean deleted;
+        private boolean binary;
+        private boolean incomplete;
+        private boolean reviewable = true;
     }
 }

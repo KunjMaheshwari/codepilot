@@ -2,9 +2,9 @@
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Activity, AlertTriangle, Bug, Code2 } from "lucide-react";
-import { mockDashboardStats } from "@/lib/mock-data";
+import type { DashboardStats as DashboardStatsData } from "@/lib/api";
 
-export function DashboardStats() {
+export function DashboardStats({ stats }: { stats: DashboardStatsData }) {
   return (
     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
       <Card>
@@ -13,8 +13,8 @@ export function DashboardStats() {
           <Code2 className="h-4 w-4 text-muted-foreground" />
         </CardHeader>
         <CardContent>
-          <div className="text-2xl font-bold">{mockDashboardStats.totalReviews}</div>
-          <p className="text-xs text-muted-foreground">+20.1% from last month</p>
+          <div className="text-2xl font-bold">{stats.totalReviews}</div>
+          <p className="text-xs text-muted-foreground">Reviews for your account</p>
         </CardContent>
       </Card>
       <Card>
@@ -23,8 +23,8 @@ export function DashboardStats() {
           <Bug className="h-4 w-4 text-muted-foreground" />
         </CardHeader>
         <CardContent>
-          <div className="text-2xl font-bold">{mockDashboardStats.issuesDetected}</div>
-          <p className="text-xs text-muted-foreground">+4.3% from last month</p>
+          <div className="text-2xl font-bold">{stats.issuesDetected}</div>
+          <p className="text-xs text-muted-foreground">Findings across reviews</p>
         </CardContent>
       </Card>
       <Card>
@@ -33,8 +33,8 @@ export function DashboardStats() {
           <AlertTriangle className="h-4 w-4 text-destructive" />
         </CardHeader>
         <CardContent>
-          <div className="text-2xl font-bold text-destructive">{mockDashboardStats.criticalIssues}</div>
-          <p className="text-xs text-muted-foreground">-12.5% from last month</p>
+          <div className="text-2xl font-bold text-destructive">{stats.criticalIssues}</div>
+          <p className="text-xs text-muted-foreground">Requires attention</p>
         </CardContent>
       </Card>
       <Card>
@@ -43,8 +43,8 @@ export function DashboardStats() {
           <Activity className="h-4 w-4 text-muted-foreground" />
         </CardHeader>
         <CardContent>
-          <div className="text-2xl font-bold">{mockDashboardStats.activeRepositories}</div>
-          <p className="text-xs text-muted-foreground">+2 since last week</p>
+          <div className="text-2xl font-bold">{stats.activeRepositories}</div>
+          <p className="text-xs text-muted-foreground">Connected repositories</p>
         </CardContent>
       </Card>
     </div>

@@ -37,9 +37,11 @@ public class SecurityConfig {
             .csrf(csrf -> csrf
                 .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
                 .csrfTokenRequestHandler(new CsrfTokenRequestAttributeHandler())
+                .ignoringRequestMatchers("/api/v1/webhooks/github")
             )
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/v1/auth/**", "/swagger-ui/**", "/v3/api-docs/**", "/swagger-ui.html").permitAll()
+                .requestMatchers("/oauth2/**", "/login/oauth2/code/**", "/swagger-ui/**",
+                        "/v3/api-docs/**", "/swagger-ui.html", "/api/v1/webhooks/github").permitAll()
                 .anyRequest().authenticated()
             )
             .oauth2Login(oauth2 -> oauth2

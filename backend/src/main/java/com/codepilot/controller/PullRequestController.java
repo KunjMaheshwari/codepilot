@@ -9,6 +9,8 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.data.web.PageableDefault;
+import org.springframework.data.domain.Sort;
 
 import java.util.UUID;
 
@@ -20,7 +22,8 @@ public class PullRequestController {
     private final PullRequestService pullRequestService;
 
     @GetMapping
-    public PageDto<PullRequestDto> getPullRequests(Pageable pageable) {
+    public PageDto<PullRequestDto> getPullRequests(
+            @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
         return pullRequestService.getPullRequests(pageable);
     }
 

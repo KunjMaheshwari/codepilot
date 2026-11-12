@@ -2,9 +2,18 @@
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { mockActivityData } from "@/lib/mock-data";
+import type { Review } from "@/lib/api";
 
-export function ActivityChart() {
+export function ActivityChart({ reviews }: { reviews: Review[] }) {
+  const activity = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date();
+    date.setDate(date.getDate() - (6 - index));
+    const key = date.toLocaleDateString();
+    return {
+      name: date.toLocaleDateString(undefined, { weekday: "short" }),
+      reviews: reviews.filter((review) => review.createdAt && new Date(review.createdAt).toLocaleDateString() === key).length,
+    };
+  });
   return (
     <Card className="col-span-4">
       <CardHeader>
@@ -12,7 +21,7 @@ export function ActivityChart() {
       </CardHeader>
       <CardContent className="pl-2">
         <ResponsiveContainer width="100%" height={350}>
-          <BarChart data={mockActivityData}>
+          <BarChart data={activity}>
             <XAxis
               dataKey="name"
               stroke="#888888"
