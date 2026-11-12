@@ -436,5 +436,44 @@ While the repository has a clean architectural skeleton (Spring Boot 3.2.3 API +
 - **Backend**: Unchanged in Phase 8 (100/100 backend unit + Testcontainers integration tests passed at the end of Phase 7).
 
 ### Remaining Frontend Limitations
-- No automated frontend unit or Playwright E2E test suite is configured in `frontend/package.json` yet; UI verification in Phase 8 covers ESLint, TypeScript typechecking, and production Next.js build compilation.
+- No automated frontend unit or Playwright E2E test suite was configured in `frontend/package.json` in Phase 8; resolved in Phase 9 below.
 - Live browser walkthroughs against a running backend + GitHub OAuth app require runtime OAuth credentials.
+
+---
+
+## 16. Phase 9 Remediation Update (End-to-End Testing, Integration Testing & Quality Assurance)
+
+### Testing Architecture Overview
+- **Frontend E2E Suite (`frontend/e2e/` + `frontend/playwright.config.ts`)**:
+  - Installed `@playwright/test` and Chromium (`npm run test:e2e` script added to `frontend/package.json`).
+  - Configured Playwright against the production Next.js server (`npm run start -- -p 3000`) with deterministic API route interception in `frontend/e2e/fixtures.ts` (`setupAuthenticatedApi`, `consoleErrors` assertion fixture).
+  - Test specs:
+    - `frontend/e2e/landing-auth.spec.ts`: Landing page rendering, GitHub OAuth login entry point, and unauthenticated redirect/session-expiry handling.
+    - `frontend/e2e/dashboard-repos.spec.ts`: Authenticated dashboard metrics, 7-day activity chart, repository search & active/inactive filtering, PR sync, and manual review submission with duplicate-click protection.
+    - `frontend/e2e/reviews-settings.spec.ts`: Split-pane review workspace, live job polling transition (`QUEUED` -> `COMPLETED`), severity breakdown filtering, finding navigation (`Previous`/`Next`), settings account metadata, GitHub disconnect confirmation dialog, and sign-out flow.
+    - `frontend/e2e/responsive-a11y.spec.ts`: Mobile viewport (`390x844`) responsive sidebar `Sheet` drawer and accessibility landmark/keyboard checks.
+- **Backend Full-Stack Integration Suite (`backend/src/test/java/com/codepilot/integration/FullReviewJourneyIntegrationTest.java`)**:
+  - Runs against real Testcontainers (`postgres:17-alpine` with Flyway `V1`–`V7` migrations + `redis:7-alpine`) with `@AutoConfigureMockMvc`, `@MockBean GitHubApiClient`, and `MockRestServiceServer` for Gemini API responses.
+  - Verifies the complete end-to-end journey: authenticated repo sync -> PR sync -> manual review submission -> Redis job queuing -> `ReviewJobWorker.poll()` execution -> Gemini structured JSON parsing -> PostgreSQL findings persistence -> idempotent `GitHubCommentPublication` (`PUBLISHED`) -> `GET /api/v1/reviews/{id}/findings` -> cross-tenant isolation (`404`/`403` for non-owners) -> token redaction in API responses.
+  - Verifies concurrent worker safety (`concurrentWorkersClaimReviewJobAtMostOnce`): two threads racing to claim the same queued review job result in at most one owner claiming and completing the job.
+
+### Verification Results
+- **Frontend (`cd frontend && npm run lint && npx tsc --noEmit && npm run build && npx playwright test`)**:
+  - `npm run lint`: Passed (0 errors).
+  - `npx tsc --noEmit`: Passed (0 errors).
+  - `npm run build`: Passed (compiled `/`, `/dashboard`, `/dashboard/repositories`, `/dashboard/reviews`, `/dashboard/settings`).
+  - `npx playwright test`: **13 passed (8.1s)** across all 4 spec files.
+- **Backend (`cd backend && mvn clean test -B && mvn verify -B`)**:
+  - **102 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`).
+  - Production JAR check (`jar tf backend/target/backend-0.0.1-SNAPSHOT.jar | grep -E "application-test|docker-java"`): Clean — no test configuration or test dependencies packaged in the production JAR.
+
+### Known Gaps & Remaining Limitations
+- Playwright E2E tests stub backend `/api/v1/*` HTTP responses via `page.route` rather than running against a live Spring Boot + GitHub OAuth app instance (external GitHub OAuth credentials are not present in local/CI test environments).
+- Dockerfiles and CI/CD pipeline definitions (GitHub Actions) are not yet added (scheduled for Phase 10).
+
+### Updated Production-Readiness Assessment
+- **Build & Packaging**: Ready (Java 21 LTS target, clean production JAR).
+- **Database, Migrations & Queue**: Ready (PostgreSQL 17 + Flyway V1–V7 + Redis 7 ZSET retries, atomic job claiming, and Testcontainers verification).
+- **Security & Tenant Isolation**: Ready (OAuth2 session cookies, XSRF token handling, CORS allowlist, cross-tenant isolation verified).
+- **AI Review & GitHub Publishing**: Ready (strict Gemini JSON schema + untrusted diff delimiters + idempotent GitHub PR comment publication gated behind `codepilot.review.publish-comments-enabled`).
+- **Frontend & QA**: Ready (complete UI redesign + 13 Playwright E2E tests + 102 backend unit/integration tests passing). Remaining work is containerization and CI/CD automation (Phase 10).
