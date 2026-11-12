@@ -67,21 +67,15 @@ While the repository has a clean architectural skeleton (Spring Boot 3.2.3 API +
 * **Fix applied:** Updated `<java.version>25</java.version>` to `<java.version>21</java.version>` (Java 21 LTS, supported by Spring Boot `3.2.3`, Lombok `1.18.36`, ByteBuddy `1.15.11`, and Mockito `5.14.2`).
 * **Verification:** `cd backend && mvn clean test -B`, `mvn verify -B`, and `mvn package -B` all succeeded without `-Djava.version` overrides (`javac [debug release 21]`, 55/55 tests passing).
 
-### P0-2: Frontend Mutations Blocked by Missing CSRF Token Header & Unwired Security CORS
-* **File/module affected:** `backend/src/main/java/com/codepilot/config/SecurityConfig.java` (lines 35–46), `backend/src/main/java/com/codepilot/config/WebConfig.java` (lines 24–31), `frontend/src/lib/api.ts` (lines 99–113)
-* **Exact problem:**
-  1. `SecurityConfig` enables CSRF via `CookieCsrfTokenRepository.withHttpOnlyFalse()` and `CsrfTokenRequestAttributeHandler()`, requiring `X-XSRF-TOKEN` on `POST`/`PUT`/`DELETE`. `frontend/src/lib/api.ts` sends `credentials: "include"` but **never reads `XSRF-TOKEN` from `document.cookie` or sends `X-XSRF-TOKEN`**.
-  2. `WebConfig` configures CORS via `WebMvcConfigurer.addCorsMappings`, but `SecurityConfig` does **not** call `.cors(Customizer.withDefaults())`. In Spring Security 6, unauthenticated/preflight `OPTIONS` requests hit the security filter chain before `WebMvcConfigurer` and are rejected with `401`/`403`.
-* **User/business impact:** Every mutating action from the frontend (`POST /api/v1/repositories/sync`, `POST /api/v1/repositories/{id}/reviews`, `DELETE /api/v1/auth/github`) fails with `403 Forbidden`, and cross-origin browser preflight requests fail.
-* **Recommended fix:** Add `.cors(Customizer.withDefaults())` and a `CorsConfigurationSource` bean in `SecurityConfig` driven by configurable allowed origins; update `frontend/src/lib/api.ts` to read the `XSRF-TOKEN` cookie and include `X-XSRF-TOKEN` on non-safe HTTP methods (and handle cross-subdomain cookie `Domain`/`SameSite=None; Secure` in production).
-* **Verification method:** Execute browser/integration tests performing `OPTIONS` preflight, `POST /api/v1/repositories/sync`, `POST /api/v1/repositories/{id}/reviews`, and `DELETE /api/v1/auth/github` from the frontend origin.
+### P0-2: Frontend Mutations Blocked by Missing CSRF Token Header & Unwired Security CORS — **FIXED (Phase 5)**
+* **File/module affected:** `backend/src/main/java/com/codepilot/config/SecurityConfig.java`, `backend/src/main/java/com/codepilot/controller/AuthController.java`, `frontend/src/lib/api.ts`
+* **Fix applied:** Wired `.cors(Customizer.withDefaults())` with explicit `CorsConfigurationSource` (rejecting wildcards and untrusted origins), configured `CookieCsrfTokenRepository` with `CsrfTokenRequestAttributeHandler` (`csrfRequestAttributeName=null` so `XSRF-TOKEN` is emitted), added `GET /api/v1/auth/csrf`, and updated `frontend/src/lib/api.ts` to fetch/read `XSRF-TOKEN` and send `X-XSRF-TOKEN` on all `POST`/`PUT`/`PATCH`/`DELETE` requests.
+* **Verification:** `SecurityHardeningIntegrationTest` verified `XSRF-TOKEN` issuance, `403` on missing/invalid CSRF tokens, `204` on valid CSRF token, and `OPTIONS` CORS allow/reject behavior.
 
-### P0-3: Hardcoded `http://localhost:3000` in Production Backend Security & Controllers
-* **File/module affected:** `backend/src/main/java/com/codepilot/config/SecurityConfig.java` (line 51), `backend/src/main/java/com/codepilot/config/WebConfig.java` (line 27), `backend/src/main/java/com/codepilot/controller/AuthController.java` (line 28)
-* **Exact problem:** OAuth2 login `.defaultSuccessUrl("http://localhost:3000/dashboard", true)`, CORS `.allowedOrigins("http://localhost:3000")`, and `AuthController.githubCallback` redirect URI `http://localhost:3000/dashboard` are hardcoded.
-* **User/business impact:** In any staging or production deployment, GitHub OAuth login redirects users to `localhost:3000` and CORS blocks the production frontend origin.
-* **Recommended fix:** Externalize `codepilot.frontend.url` and `codepilot.cors.allowed-origins` in `application.yml` via environment variables (e.g., `${FRONTEND_URL:http://localhost:3000}`).
-* **Verification method:** Start backend with custom `FRONTEND_URL` and `CORS_ALLOWED_ORIGINS` and verify OAuth redirect `Location` header and CORS `Access-Control-Allow-Origin` match.
+### P0-3: Hardcoded `http://localhost:3000` in Production Backend Security & Controllers — **FIXED (Phase 5)**
+* **File/module affected:** `backend/src/main/java/com/codepilot/config/SecurityConfig.java`, `backend/src/main/java/com/codepilot/config/WebConfig.java`, `backend/src/main/java/com/codepilot/controller/AuthController.java`, `backend/src/main/resources/application.yml`
+* **Fix applied:** Externalized `codepilot.frontend.url` (`${FRONTEND_URL:http://localhost:3000}`) and `codepilot.cors.allowed-origins` (`${CORS_ALLOWED_ORIGINS:http://localhost:3000}`), added session fixation protection (`migrateSession()`), `HttpOnly`/`Secure`/`SameSite` cookie config, security headers (`X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`), `POST /api/v1/auth/logout`, `GET /api/v1/auth/me`, session invalidation on `DELETE /api/v1/auth/github`, `RateLimitFilter`, and restricted Swagger UI (`codepilot.security.swagger-public=false` default).
+* **Verification:** `SecurityHardeningIntegrationTest` verified logout session/cookie invalidation, `/api/v1/auth/me` token-free output, cross-tenant `404` isolation, and `/v3/api-docs` protection.
 
 ### P0-4: Webhook Worker Crashes with `TransactionRequiredException` on First Delivery — **FIXED (Phase 3)**
 * **File/module affected:** `backend/src/main/java/com/codepilot/repository/WebhookDeliveryRepository.java` (line 25), `backend/src/main/java/com/codepilot/service/GitHubWebhookService.java` (line 82)
@@ -158,12 +152,10 @@ While the repository has a clean architectural skeleton (Spring Boot 3.2.3 API +
 
 ## 5. Medium-Priority Issues (P2)
 
-### P2-1: `SecurityConfig` Identifies Users by Email Instead of Immutable `githubUserId`
-* **File/module affected:** `backend/src/main/java/com/codepilot/config/SecurityConfig.java` (lines 63–78), `backend/src/main/java/com/codepilot/service/RepositoryService.java` (lines 56–67)
-* **Exact problem:** OAuth login and `RepositoryService.getAuthenticatedUser()` resolve users by `email` (falling back to `<login>@users.noreply.github.com` when GitHub email is private). If a user changes their GitHub username or primary email, a new `User` row is created or `linkAccount` throws `"GitHub account is already connected to another user"`.
-* **User/business impact:** Users with private or changed GitHub emails get locked out or lose access to their repositories.
-* **Recommended fix:** Resolve the authenticated `User` via `ConnectedGitHubAccountRepository.findByGithubUserId(githubUserId)` first, falling back to email only on initial registration.
-* **Verification method:** Test OAuth login with `email = null` followed by username/email change, verifying the same `User` record is resolved.
+### P2-1: `SecurityConfig` Identifies Users by Email Instead of Immutable `githubUserId` — **FIXED (Phase 5)**
+* **File/module affected:** `backend/src/main/java/com/codepilot/config/SecurityConfig.java`, `backend/src/main/java/com/codepilot/service/RepositoryService.java`, `backend/src/main/java/com/codepilot/repository/ConnectedGitHubAccountRepository.java`
+* **Fix applied:** `oauth2UserService` and `RepositoryService.getAuthenticatedUser()` now resolve `User` via immutable `githubUserId` (`ConnectedGitHubAccountRepository.findByGithubUserId` with `@EntityGraph(attributePaths = "user")`), falling back to email only when `id` is absent or on initial registration.
+* **Verification:** `SecurityHardeningIntegrationTest` verified `/api/v1/auth/me` and cross-tenant isolation using `githubUserId`-linked OAuth2 login.
 
 ### P2-2: Unused `ReviewSettings` Entity & Missing Settings Enforcement
 * **File/module affected:** `backend/src/main/java/com/codepilot/model/ReviewSettings.java`, `backend/src/main/java/com/codepilot/repository/ReviewSettingsRepository.java`, `backend/src/main/java/com/codepilot/service/CodeReviewOrchestrator.java`, `frontend/src/app/dashboard/settings/page.tsx`
@@ -267,14 +259,16 @@ While the repository has a clean architectural skeleton (Spring Boot 3.2.3 API +
 
 ## 9. Build and Test Results (Actual Evidence)
 
-### Backend (Updated After Phase 4 Async Review & Webhook Reliability Fixes)
-* **`cd backend && mvn clean test -B && mvn verify -B`:** **PASSED** (exit code 0; `Tests run: 71, Failures: 0, Errors: 0, Skipped: 0`).
-  * **Unit tests (57):** Existing 50 + 3 `StartupConfigurationValidatorTest` + 3 new `ReviewJobWorkerTest` (ZSET retry, DLQ exhaustion, ZSET promotion) + 1 new `ReviewJobServiceTest` (terminal state protection).
-  * **H2/Spring Boot integration tests (5):** `CodePilotApplicationTests` (1), `AiReviewEngineIntegrationTest` (3), `RepositoryControllerTest` (1).
-  * **PostgreSQL 17 + Redis 7 Testcontainers infrastructure & reliability tests (9):** `PostgresRedisInfrastructureIntegrationTest` (4) + `AsyncReliabilityIntegrationTest` (5: concurrent atomic claiming across 4 threads, duplicate PR/head-SHA idempotency, stale `PROCESSING` crash recovery, `PENDING` & stale `QUEUED` restart recovery, duplicate & failed webhook delivery recovery).
-* **Remaining Risks (Deferred to Phase 5+):**
-  * `GitHubApiClient.waitBeforeRetry(...)` still uses `Thread.sleep` for short (<=5s) GitHub rate-limit backoffs during synchronous HTTP calls.
-  * `CodeReviewOrchestrator` still does not post review comments back to GitHub (`P1-5`), and `ReviewResponseValidator` (`P1-8`) / `SecurityConfig` (`P0-2`, `P0-3`) / frontend (`P0-5`, `P1-6`) remain for upcoming phases.
+### Backend & Frontend (Updated After Phase 5 Security Hardening)
+* **`cd backend && mvn clean test -B && mvn verify -B`:** **PASSED** (exit code 0; `Tests run: 77, Failures: 0, Errors: 0, Skipped: 0`).
+  * **Unit tests (57):** Existing 50 + 3 `StartupConfigurationValidatorTest` + 3 `ReviewJobWorkerTest` + 1 `ReviewJobServiceTest`.
+  * **H2/Spring Boot integration & security tests (11):** `CodePilotApplicationTests` (1), `AiReviewEngineIntegrationTest` (3), `RepositoryControllerTest` (1), `SecurityHardeningIntegrationTest` (6: CSRF cookie issuance, CSRF enforcement on `DELETE`, CORS allow/reject, `/api/v1/auth/me` secret-free response & cross-tenant `404`, logout session invalidation & cookie clearing, webhook HMAC without CSRF & Swagger restriction).
+  * **PostgreSQL 17 + Redis 7 Testcontainers tests (9):** `PostgresRedisInfrastructureIntegrationTest` (4) + `AsyncReliabilityIntegrationTest` (5).
+* **`cd frontend && npm run lint && npx tsc --noEmit && npm run build`:** **PASSED** (exit code 0; ESLint 0 errors, TypeScript 0 errors, Next.js 16.4.5 production build succeeded).
+* **Remaining Security Risks (Phase 6+):**
+  * `RateLimitFilter` is in-memory per instance (sufficient for single-node; multi-instance deployments should back it with Redis).
+  * In cross-subdomain production deployments (`app.example.com` + `api.example.com`), `COOKIE_SECURE=true` and `COOKIE_SAME_SITE=None` must be set in environment variables (and `CookieCsrfTokenRepository` domain configured if subdomains differ).
+  * `P0-5` (PR sync endpoint/UI), `P1-5` (GitHub PR review comment posting), `P1-6` (`ReviewsPage` findings), `P1-8` (`ReviewResponseValidator`), and Docker/CI/CD remain for Phase 6.
 
 ### Frontend
 * **Lint & Production Build (`cd frontend && npm run lint && npm run build`):** **PASSED** (exit code 0)

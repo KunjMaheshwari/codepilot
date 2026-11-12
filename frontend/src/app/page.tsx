@@ -34,11 +34,11 @@ export default function Home() {
                 </p>
               </div>
               <div className="space-x-4">
-                <Link href={githubLoginUrl}>
+                <a href={githubLoginUrl}>
                   <Button className="h-11 px-8">
                     Sign in with GitHub <ArrowRight className="ml-2 h-4 w-4" />
                   </Button>
-                </Link>
+                </a>
                 <Link href="/dashboard">
                   <Button variant="outline" className="h-11 px-8">
                     <GitBranch className="mr-2 h-4 w-4" /> Open dashboard

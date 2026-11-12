@@ -56,6 +56,16 @@ public class RepositoryService {
             throw new IllegalStateException("No authenticated user found");
         }
 
+        Object githubId = oauth2User.getAttributes() != null ? oauth2User.getAttributes().get("id") : null;
+        if (githubId != null) {
+            User byGithubId = connectedGitHubAccountRepository.findByGithubUserId(githubId.toString())
+                    .map(ConnectedGitHubAccount::getUser)
+                    .orElse(null);
+            if (byGithubId != null) {
+                return byGithubId;
+            }
+        }
+
         String email = oauth2User.getAttribute("email");
         if (email == null) {
             String login = oauth2User.getAttribute("login");

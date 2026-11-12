@@ -1,6 +1,7 @@
 "use client";
 
-import { Bell } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Bell, Menu } from "lucide-react";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,9 +15,21 @@ import {
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Sidebar } from "./sidebar";
-import { Menu } from "lucide-react";
+import { api } from "@/lib/api";
 
 export function Header() {
+  const router = useRouter();
+
+  const handleLogout = async () => {
+    try {
+      await api.logout();
+    } catch {
+      // Redirect even if session was already invalidated.
+    } finally {
+      router.push("/");
+    }
+  };
+
   return (
     <header className="flex h-14 items-center gap-4 border-b bg-background/50 px-4 backdrop-blur-xl lg:px-6">
       <Sheet>
@@ -52,9 +65,9 @@ export function Header() {
           <DropdownMenuContent align="end">
             <DropdownMenuLabel>My Account</DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>Settings</DropdownMenuItem>
-            <DropdownMenuItem>Support</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => router.push("/dashboard/settings")}>Settings</DropdownMenuItem>
             <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => void handleLogout()}>Sign out</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

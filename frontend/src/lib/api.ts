@@ -94,18 +94,52 @@ export interface DashboardStats {
   activeRepositories: number;
 }
 
+export interface UserProfile {
+  id: string;
+  username: string;
+  email: string;
+  createdAt?: string;
+}
+
 type RequestOptions = Omit<RequestInit, "body"> & { body?: unknown };
+
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS", "TRACE"]);
+
+function readCookie(name: string): string | undefined {
+  if (typeof document === "undefined") return undefined;
+  const prefix = `${name}=`;
+  const match = document.cookie
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(prefix));
+  return match ? decodeURIComponent(match.slice(prefix.length)) : undefined;
+}
+
+async function ensureCsrfToken(): Promise<string | undefined> {
+  const existing = readCookie("XSRF-TOKEN");
+  if (existing) return existing;
+  await fetch(`${API_BASE_URL}/api/v1/auth/csrf`, {
+    method: "GET",
+    credentials: "include",
+  });
+  return readCookie("XSRF-TOKEN");
+}
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 15000);
   try {
+    const method = (options.method ?? "GET").toUpperCase();
+    const csrfToken = SAFE_METHODS.has(method) ? undefined : await ensureCsrfToken();
+
     const response = await fetch(`${API_BASE_URL}${path}`, {
       ...options,
+      method,
       credentials: "include",
       headers: {
         Accept: "application/json",
         ...(options.body === undefined ? {} : { "Content-Type": "application/json" }),
+        ...(csrfToken ? { "X-XSRF-TOKEN": csrfToken } : {}),
         ...options.headers,
       },
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
@@ -130,6 +164,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
       throw new ApiError("The request timed out. Please try again.", 408);
+    }
+    if (error instanceof TypeError) {
+      throw new ApiError("Your session has expired or the API is unreachable. Please sign in again.", 401);
     }
     throw error;
   } finally {
@@ -161,6 +198,8 @@ export const api = {
     request<Page<ReviewFinding>>(
       `/api/v1/reviews/${reviewId}/findings?page=${page}&size=${size}`,
     ),
+  getMe: () => request<UserProfile>("/api/v1/auth/me"),
+  logout: () => request<void>("/api/v1/auth/logout", { method: "POST" }),
   disconnectGitHub: () =>
     request<void>("/api/v1/auth/github", { method: "DELETE" }),
 };
