@@ -3,6 +3,7 @@ package com.codepilot.controller;
 import com.codepilot.dto.PageDto;
 import com.codepilot.dto.ReviewDto;
 import com.codepilot.dto.ReviewFindingDto;
+import com.codepilot.dto.ReviewJobStatusDto;
 import com.codepilot.service.ReviewService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Pageable;
@@ -31,6 +32,11 @@ public class ReviewController {
     @GetMapping("/{id}")
     public ReviewDto getReview(@PathVariable UUID id) {
         return reviewService.getReview(id);
+    }
+
+    @GetMapping("/{id}/job")
+    public ReviewJobStatusDto getJobStatus(@PathVariable UUID id) {
+        return reviewService.getJobStatus(id);
     }
 
     @GetMapping("/{id}/findings")

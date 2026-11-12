@@ -4,10 +4,12 @@ import com.codepilot.dto.CreateReviewRequest;
 import com.codepilot.dto.PageDto;
 import com.codepilot.dto.ReviewDto;
 import com.codepilot.dto.ReviewFindingDto;
+import com.codepilot.dto.ReviewJobStatusDto;
 import com.codepilot.exception.ResourceNotFoundException;
 import com.codepilot.model.PullRequest;
 import com.codepilot.model.Repository;
 import com.codepilot.model.Review;
+import com.codepilot.model.ReviewJob;
 import com.codepilot.model.ReviewFinding;
 import com.codepilot.model.User;
 import com.codepilot.repository.PullRequestRepository;
@@ -20,6 +22,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.ZonedDateTime;
 import java.util.List;
@@ -37,6 +41,11 @@ public class ReviewService {
     private final CodeReviewOrchestrator orchestrator;
     private final GitHubIntegrationService gitHubIntegrationService;
     private final RepositoryService repositoryService;
+    private final ReviewJobService reviewJobService;
+    private final ReviewJobProducer reviewJobProducer;
+
+    @org.springframework.beans.factory.annotation.Value("${codepilot.review.async.enabled:true}")
+    private boolean asyncEnabled;
 
     @Transactional(readOnly = true)
     public PageDto<ReviewDto> getReviews(Pageable pageable) {
@@ -63,6 +72,7 @@ public class ReviewService {
         return new PageDto<>(findings.map(ReviewFindingDto::new));
     }
 
+    @Transactional
     public ReviewDto createReview(UUID repositoryId, CreateReviewRequest request) {
         User user = repositoryService.getAuthenticatedUser();
         Repository repository = repositoryRepository.findByIdAndOwnerId(repositoryId, user.getId())
@@ -75,16 +85,68 @@ public class ReviewService {
             throw new IllegalArgumentException("PullRequest does not belong to the specified Repository");
         }
 
+        return createReview(user, repository, pullRequest);
+    }
+
+    @Transactional
+    public ReviewDto createReviewForWebhook(User user, Repository repository, PullRequest pullRequest) {
+        return createReview(user, repository, pullRequest);
+    }
+
+    private ReviewDto createReview(User user, Repository repository, PullRequest pullRequest) {
+        java.util.Optional<Review> activeReview = reviewRepository.findFirstByPullRequestIdAndStatusIn(
+                pullRequest.getId(), List.of("QUEUED", "PROCESSING", "PARTIAL"));
+        if (activeReview.isPresent()
+                && (pullRequest.getHeadSha() == null
+                || pullRequest.getHeadSha().equals(activeReview.get().getHeadSha()))) {
+            return new ReviewDto(activeReview.get());
+        }
+        if (pullRequest.getHeadSha() != null) {
+            java.util.Optional<Review> existingRevision = reviewRepository
+                    .findFirstByPullRequestIdAndHeadShaAndStatusIn(
+                            pullRequest.getId(), pullRequest.getHeadSha(),
+                            List.of("QUEUED", "PROCESSING", "COMPLETED", "PARTIAL"));
+            if (existingRevision.isPresent()) {
+                return new ReviewDto(existingRevision.get());
+            }
+        }
+
         Review review = new Review();
         review.setPullRequest(pullRequest);
-        review.setStatus("PROCESSING");
-        review.setStartedAt(ZonedDateTime.now());
+        review.setHeadSha(pullRequest.getHeadSha());
+        review.setStatus(asyncEnabled ? "QUEUED" : "PROCESSING");
+        if (!asyncEnabled) {
+            review.setStartedAt(ZonedDateTime.now());
+        }
         review = reviewRepository.save(review);
 
-        // Sync execution for foundation (would be async in real app)
-        processReview(review, pullRequest, repository, user);
+        if (asyncEnabled) {
+            ReviewJob job = reviewJobService.createJob(review);
+            if (TransactionSynchronizationManager.isSynchronizationActive()) {
+                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        reviewJobProducer.publish(job);
+                    }
+                });
+            } else {
+                reviewJobProducer.publish(job);
+            }
+        } else {
+            processReview(review, pullRequest, repository, user);
+        }
 
         return new ReviewDto(review);
+    }
+
+    @Transactional(readOnly = true)
+    public ReviewJobStatusDto getJobStatus(UUID reviewId) {
+        User user = repositoryService.getAuthenticatedUser();
+        Review review = reviewRepository.findByIdAndPullRequestRepositoryOwnerId(reviewId, user.getId())
+                .orElseThrow(() -> new ResourceNotFoundException("Review", "id", reviewId));
+        ReviewJob job = reviewJobService.findByReviewId(review.getId())
+                .orElseThrow(() -> new ResourceNotFoundException("ReviewJob", "reviewId", reviewId));
+        return new ReviewJobStatusDto(job);
     }
 
     private void processReview(Review review, PullRequest pullRequest, Repository repository, User user) {
@@ -96,7 +158,7 @@ public class ReviewService {
             // Status is updated by the orchestrator
         } catch (Exception e) {
             log.error("Error processing review", e);
-            // review.setStatus("FAILED");
+            review.setStatus("FAILED");
         } finally {
             review.setCompletedAt(ZonedDateTime.now());
             reviewRepository.save(review);

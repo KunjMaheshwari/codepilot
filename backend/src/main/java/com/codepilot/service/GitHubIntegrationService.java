@@ -96,6 +96,16 @@ public class GitHubIntegrationService {
                 .toList();
     }
 
+    @Transactional
+    public PullRequest synchronizePullRequest(User user, Repository repository, int prNumber) {
+        return upsertPullRequest(repository, getPullRequestDetails(user, repository, prNumber));
+    }
+
+    @Transactional
+    public PullRequest persistSynchronizedPullRequest(Repository repository, Map<String, Object> remote) {
+        return upsertPullRequest(repository, remote);
+    }
+
     private PullRequest upsertPullRequest(Repository repository, Map<String, Object> remote) {
         Object rawNumber = remote.get("number");
         if (!(rawNumber instanceof Number number)) {

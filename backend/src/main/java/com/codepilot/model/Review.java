@@ -37,6 +37,9 @@ public class Review {
     @Column(nullable = false, length = 50)
     private String status;
 
+    @Column(length = 64)
+    private String headSha;
+
     private ZonedDateTime startedAt;
 
     private ZonedDateTime completedAt;

@@ -33,12 +33,13 @@ public class CodeReviewOrchestrator {
     }
 
     public void orchestrateReview(ReviewJob job) {
-        log.info("Starting review orchestration for job ID: {}", job.getId());
+        log.info("Starting review orchestration for job ID: {} correlationId={}",
+                job.getId(), job.getCorrelationId());
         try {
             Review review = job.getReview();
             PullRequest pr = review.getPullRequest();
 
-            reviewJobService.updateStatus(job, "IN_PROGRESS");
+            reviewJobService.updateStatus(job, "PROCESSING");
 
             String diff = githubService.getPullRequestDiff(pr.getRepository().getOwner(), pr.getRepository(), pr.getPrNumber());
             List<DiffParser.ParsedFile> parsedFiles = diffParser.parseDiff(diff);
@@ -65,9 +66,11 @@ public class CodeReviewOrchestrator {
             reviewRepository.save(review);
 
             reviewJobService.updateStatus(job, review.getStatus());
-            log.info("Review orchestration completed successfully for job ID: {}", job.getId());
+            log.info("Review orchestration completed successfully for job ID: {} correlationId={}",
+                    job.getId(), job.getCorrelationId());
         } catch (Exception e) {
-            log.error("Failed to orchestrate review for job ID: {}", job.getId(), e);
+            log.error("Failed to orchestrate review for job ID: {} correlationId={}",
+                    job.getId(), job.getCorrelationId(), e);
             reviewJobService.markFailed(job, e.getMessage());
 
             Review review = job.getReview();
