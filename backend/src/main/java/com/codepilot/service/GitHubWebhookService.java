@@ -11,14 +11,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.ZonedDateTime;
 import java.util.List;
-import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -66,7 +64,8 @@ public class GitHubWebhookService {
         delivery.setRepositoryGithubId(repositoryId.isNumber() ? repositoryId.asText() : null);
         JsonNode pullRequest = root.path("number");
         delivery.setPullRequestNumber(pullRequest.isIntegralNumber() && pullRequest.asInt() > 0
-                ? pullRequest.asInt() : null);
+                ? pullRequest.asInt()
+                : null);
         delivery.setProcessingStatus("RECEIVED");
         delivery.setAttemptCount(0);
         delivery.setReceivedAt(ZonedDateTime.now());
@@ -101,7 +100,8 @@ public class GitHubWebhookService {
                     .findWithOwnerByGithubRepoId(delivery.getRepositoryGithubId())
                     .orElse(null);
             if (repository == null || repository.getOwner() == null) {
-                deliveryStateService.markIgnored(delivery, "UNLINKED_REPOSITORY", "Repository is not linked to CodePilot");
+                deliveryStateService.markIgnored(delivery, "UNLINKED_REPOSITORY",
+                        "Repository is not linked to CodePilot");
                 return;
             }
 

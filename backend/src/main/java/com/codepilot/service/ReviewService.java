@@ -39,7 +39,6 @@ public class ReviewService {
     private final PullRequestRepository pullRequestRepository;
     private final RepositoryRepository repositoryRepository;
     private final CodeReviewOrchestrator orchestrator;
-    private final GitHubIntegrationService gitHubIntegrationService;
     private final RepositoryService repositoryService;
     private final ReviewJobService reviewJobService;
     private final ReviewJobProducer reviewJobProducer;
@@ -78,7 +77,8 @@ public class ReviewService {
         Repository repository = repositoryRepository.findByIdAndOwnerId(repositoryId, user.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("Repository", "id", repositoryId));
 
-        PullRequest pullRequest = pullRequestRepository.findByIdAndRepositoryOwnerId(request.getPullRequestId(), user.getId())
+        PullRequest pullRequest = pullRequestRepository
+                .findByIdAndRepositoryOwnerId(request.getPullRequestId(), user.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("PullRequest", "id", request.getPullRequestId()));
 
         if (!pullRequest.getRepository().getId().equals(repository.getId())) {
@@ -104,7 +104,7 @@ public class ReviewService {
                 pullRequest.getId(), List.of("QUEUED", "PROCESSING", "PARTIAL"));
         if (activeReview.isPresent()
                 && (pullRequest.getHeadSha() == null
-                || pullRequest.getHeadSha().equals(activeReview.get().getHeadSha()))) {
+                        || pullRequest.getHeadSha().equals(activeReview.get().getHeadSha()))) {
             return toReviewDto(activeReview.get());
         }
         if (pullRequest.getHeadSha() != null) {
@@ -166,7 +166,8 @@ public class ReviewService {
 
     private void processReview(Review review, PullRequest pullRequest, Repository repository, User user) {
         try {
-            // String diff = gitHubIntegrationService.getPullRequestDiff(user, repository, pullRequest.getPrNumber());
+            // String diff = gitHubIntegrationService.getPullRequestDiff(user, repository,
+            // pullRequest.getPrNumber());
 
             // List<ReviewFinding> findings = aiReviewEngine.analyzeDiff(review, diff);
             orchestrator.executeReview(review, pullRequest, repository, user);

@@ -7,7 +7,6 @@ import com.codepilot.model.User;
 import com.codepilot.repository.ConnectedGitHubAccountRepository;
 import com.codepilot.repository.RepositoryRepository;
 import com.codepilot.repository.PullRequestRepository;
-import com.codepilot.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -17,7 +16,6 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.time.ZonedDateTime;
 
@@ -31,7 +29,6 @@ public class GitHubIntegrationService {
 
     private final GitHubApiClient gitHubApiClient;
     private final ConnectedGitHubAccountRepository connectedGitHubAccountRepository;
-    private final UserRepository userRepository;
     private final EncryptionService encryptionService;
     private final RepositoryRepository repositoryRepository;
     private final PullRequestRepository pullRequestRepository;
@@ -68,7 +65,8 @@ public class GitHubIntegrationService {
 
     /**
      * Synchronizes only the requested bounded page. Records absent from that page
-     * remain active because a partial fetch is not evidence that access was revoked.
+     * remain active because a partial fetch is not evidence that access was
+     * revoked.
      */
     @Transactional
     public List<Repository> synchronizeRepositories(User user, int page, int perPage) {
@@ -80,7 +78,8 @@ public class GitHubIntegrationService {
     }
 
     /**
-     * Paginates through the user's GitHub repositories and upserts each by immutable
+     * Paginates through the user's GitHub repositories and upserts each by
+     * immutable
      * GitHub repository ID. Only when full pagination completes does it deactivate
      * previously active repositories that are no longer returned by GitHub.
      */
@@ -141,7 +140,8 @@ public class GitHubIntegrationService {
     }
 
     /**
-     * Paginates through all open, closed, and merged pull requests for a repository.
+     * Paginates through all open, closed, and merged pull requests for a
+     * repository.
      */
     @Transactional
     public List<PullRequest> synchronizeAllPullRequests(User user, Repository repository) {
