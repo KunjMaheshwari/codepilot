@@ -106,3 +106,19 @@ server:
         http-only: true
         secure: ${COOKIE_SECURE:false}
         same-site: ${COOKIE_SAME_SITE:Lax}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: ${ACTUATOR_HEALTH_SHOW_DETAILS:never}
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true

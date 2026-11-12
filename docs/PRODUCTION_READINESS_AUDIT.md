@@ -476,4 +476,39 @@ While the repository has a clean architectural skeleton (Spring Boot 3.2.3 API +
 - **Database, Migrations & Queue**: Ready (PostgreSQL 17 + Flyway V1–V7 + Redis 7 ZSET retries, atomic job claiming, and Testcontainers verification).
 - **Security & Tenant Isolation**: Ready (OAuth2 session cookies, XSRF token handling, CORS allowlist, cross-tenant isolation verified).
 - **AI Review & GitHub Publishing**: Ready (strict Gemini JSON schema + untrusted diff delimiters + idempotent GitHub PR comment publication gated behind `codepilot.review.publish-comments-enabled`).
-- **Frontend & QA**: Ready (complete UI redesign + 13 Playwright E2E tests + 102 backend unit/integration tests passing). Remaining work is containerization and CI/CD automation (Phase 10).
+- **Frontend & QA**: Ready (complete UI redesign + 13 Playwright E2E tests + 102 backend unit/integration tests passing). Containerization and CI/CD automation completed in Phase 10 below.
+
+---
+
+## 17. Phase 10 Remediation Update (Docker, CI/CD, Containerization & Deployment Readiness)
+
+### Containerization & Compose Architecture
+- **Backend (`backend/Dockerfile`, `backend/.dockerignore`)**: Multi-stage build using `maven:3.9.9-eclipse-temurin-21-alpine` -> `eclipse-temurin:21-jre-alpine`, non-root runtime user `codepilot`, container-aware JVM flags (`-XX:MaxRAMPercentage=75.0 -XX:+UseG1GC`), graceful shutdown (`server.shutdown: graceful`), and `/actuator/health/readiness` health check.
+- **Frontend (`frontend/Dockerfile`, `frontend/.dockerignore`, `frontend/next.config.ts`)**: Enabled Next.js `output: "standalone"`, multi-stage `node:22-alpine` build (`npm ci` -> `npm run build` -> minimal runtime), non-root runtime user `nextjs`, and `/api/health` health check (`frontend/src/app/api/health/route.ts`).
+- **Docker Compose (`docker-compose.yml`)**: Runs `postgres:17-alpine`, `redis:7-alpine` (`--appendonly yes`), `backend`, and `frontend` on an isolated `codepilot-network` bridge with named persistent volumes (`postgres_data`, `redis_data`), `no-new-privileges:true`, `service_healthy` dependency ordering, configurable `BACKEND_HOST_PORT` / `FRONTEND_HOST_PORT`, and no public host ports on PostgreSQL or Redis (leaving local EnterpriseDB 5432 and Homebrew Redis untouched).
+
+### Health Checks, Environment Configuration & Documentation
+- Added `spring-boot-starter-actuator` (`backend/pom.xml`) and configured liveness/readiness probes (`management.endpoint.health.probes.enabled: true`, `show-details: ${ACTUATOR_HEALTH_SHOW_DETAILS:never}`) in `backend/src/main/resources/application.yml`.
+- Permitted `/actuator/health`, `/actuator/health/liveness`, and `/actuator/health/readiness` in `SecurityConfig.java`; added `StartupLifecycleLogger.java` for structured startup/shutdown logging without secret exposure.
+- Added `.env.example`, `backend/.env.example`, updated `.gitignore` for `.env.*` and Playwright artifacts, and created `docs/DOCKER_SETUP.md`, `docs/ENVIRONMENT_VARIABLES.md`, and `docs/DEPLOYMENT_GUIDE.md`.
+
+### CI/CD Workflows (`.github/workflows/`)
+- **`.github/workflows/ci.yml`**: Pull Request & `main` CI with `contents: read` least privilege, running `backend-test` (`mvn clean test -B && mvn verify -B`), `frontend-test` (`npm ci`, `npm run lint`, `npx tsc --noEmit`, `npm run build`, Playwright Chromium E2E), and `docker-validation` (`docker compose --env-file .env.example config -q`, image builds without pushing, advisory Trivy scans).
+- **`.github/workflows/deploy.yml`**: Release/manual-dispatch deployment workflow (`release: [published]` or `workflow_dispatch`) using GitHub `environment` protection gates, secret presence validation, and a configurable deployment hook.
+
+### Verification Results
+- **Docker Compose & Image Builds**: `docker compose --env-file .env.example config -q` valid; `codepilot-verify-backend` and `codepilot-verify-frontend` built cleanly.
+- **Containerized Runtime (`codepilot-verify` on ports `18080`/`13000`)**:
+  - All 4 containers (`postgres`, `redis`, `backend`, `frontend`) reached `healthy` status.
+  - Flyway migrations `V1`–`V7` succeeded (`7 rows` in `flyway_schema_history`).
+  - `/actuator/health`, `/actuator/health/liveness`, `/actuator/health/readiness` returned `UP`; `/api/health` returned `{"status":"ok"}`; `GET /api/v1/auth/csrf` returned `204` with `Access-Control-Allow-Origin: http://localhost:13000` and `XSRF-TOKEN` cookie.
+  - Non-root users verified (`codepilot` in backend, `nextjs` in frontend).
+  - Data persistence verified across `docker compose down` -> `up -d --wait` for both PostgreSQL and Redis; disposable volumes cleaned up with `down -v`.
+- **Workflow YAML Validation**: `.github/workflows/ci.yml` and `.github/workflows/deploy.yml` parsed cleanly with Ruby YAML loader.
+- **Backend (`cd backend && mvn clean test -B && mvn verify -B`)**: **Tests run: 102, Failures: 0, Errors: 0, Skipped: 0** (`BUILD SUCCESS`).
+- **Frontend (`cd frontend && npm run lint && npx tsc --noEmit && npm run build && npx playwright test`)**: ESLint 0 errors, `tsc` 0 errors, Next.js standalone build succeeded, **13 passed (8.4s)**.
+
+### Remaining Deployment Limitations
+- `NEXT_PUBLIC_API_BASE_URL` is inlined at Next.js image build time; staging and production deployments must build separate frontend images (or pass the environment-specific `NEXT_PUBLIC_API_BASE_URL` build arg in `deploy.yml`).
+- Trivy vulnerability scanning in `ci.yml` runs in advisory mode (`exit-code: "0"`, `ignore-unfixed: true`) and has not been executed locally inside GitHub Actions yet.
+- `.github/workflows/deploy.yml` contains a configurable deployment hook placeholder and requires selecting a concrete target runtime (e.g., ECS, Cloud Run, Kubernetes, or VM Compose) and populating GitHub Environment secrets before production rollout.

@@ -32,7 +32,10 @@ frontend/node_modules/
 
 # dotenv environment variables file
 .env
-.env.test
+.env.*
+!.env.example
+!backend/.env.example
+!frontend/.env.example
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
@@ -63,3 +66,7 @@ backend/codepilot*.log
 # Temp files
 /tmp/*.log
 /tmp/*.txt
+
+# Playwright artifacts
+frontend/playwright-report/
+frontend/test-results/

@@ -90,7 +90,8 @@ public class SecurityConfig {
             .addFilterBefore(rateLimitFilter, UsernamePasswordAuthenticationFilter.class)
             .authorizeHttpRequests(auth -> {
                 auth.requestMatchers("/oauth2/**", "/login/oauth2/code/**",
-                        "/api/v1/webhooks/github", "/api/v1/auth/csrf").permitAll();
+                        "/api/v1/webhooks/github", "/api/v1/auth/csrf",
+                        "/actuator/health", "/actuator/health/liveness", "/actuator/health/readiness").permitAll();
                 if (swaggerPublic) {
                     auth.requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-ui.html").permitAll();
                 }

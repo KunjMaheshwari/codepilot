@@ -1,0 +1,102 @@
+name: Release & Deployment Preparation
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target deployment environment
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
+      image_tag:
+        description: Release image tag override (defaults to git SHA)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-publish:
+    name: Build & Publish Release Images
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'production' }}
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine release image tag
+        id: meta
+        run: |
+          TAG="${{ inputs.image_tag || github.ref_name || github.sha }}"
+          echo "tag=${TAG#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ vars.CONTAINER_REGISTRY || 'ghcr.io' }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: ${{ vars.CONTAINER_REGISTRY || 'ghcr.io' }}/${{ github.repository }}/backend:${{ steps.meta.outputs.tag }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          build-args: |
+            NEXT_PUBLIC_API_BASE_URL=${{ vars.NEXT_PUBLIC_API_BASE_URL }}
+          tags: ${{ vars.CONTAINER_REGISTRY || 'ghcr.io' }}/${{ github.repository }}/frontend:${{ steps.meta.outputs.tag }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+  deploy:
+    name: Deploy to Target Environment
+    runs-on: ubuntu-latest
+    needs: build-and-publish
+    environment: ${{ inputs.environment || 'production' }}
+    steps:
+      - name: Verify required environment secrets are configured
+        env:
+          DB_URL: ${{ secrets.DB_URL }}
+          DB_USERNAME: ${{ secrets.DB_USERNAME }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+        run: |
+          for var in DB_URL DB_USERNAME DB_PASSWORD GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET GEMINI_API_KEY ENCRYPTION_KEY; do
+            if [ -z "${!var}" ]; then
+              echo "Missing required secret: $var" >&2
+              exit 1
+            fi
+          done
+          echo "All required secrets validated for environment ${{ inputs.environment || 'production' }}."
+
+      - name: Deployment hook placeholder
+        run: |
+          echo "Ready to deploy tag ${{ needs.build-and-publish.outputs.image_tag }} to ${{ inputs.environment || 'production' }}."
+          echo "Configure your target platform deployment step (e.g., ECS, Cloud Run, Kubernetes, or SSH Compose) here."
+
