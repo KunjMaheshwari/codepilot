@@ -14,7 +14,17 @@ import java.time.ZonedDateTime;
 
 @Repository
 public interface ReviewJobRepository extends JpaRepository<ReviewJob, UUID> {
+    @EntityGraph(attributePaths = {"review", "review.pullRequest", "review.pullRequest.repository"})
     List<ReviewJob> findTop50ByStatusOrderByCreatedAtAsc(String status);
+
+    @EntityGraph(attributePaths = {"review", "review.pullRequest", "review.pullRequest.repository"})
+    @Query("""
+        select j from ReviewJob j
+        where j.status = 'QUEUED'
+          and j.updatedAt < :cutoff
+        order by j.updatedAt asc
+        """)
+    List<ReviewJob> findStaleQueuedJobs(@Param("cutoff") ZonedDateTime cutoff);
     java.util.Optional<ReviewJob> findByReviewId(UUID reviewId);
 
     @EntityGraph(attributePaths = {"review", "review.pullRequest", "review.pullRequest.repository",
@@ -34,9 +44,9 @@ public interface ReviewJobRepository extends JpaRepository<ReviewJob, UUID> {
     @Modifying
     @Query(value = """
         UPDATE review_jobs SET processing_heartbeat_at = CURRENT_TIMESTAMP
-        WHERE status = 'PROCESSING'
+        WHERE id IN (:ids) AND status = 'PROCESSING'
         """, nativeQuery = true)
-    int touchProcessingJobs();
+    int touchProcessingJobs(@Param("ids") java.util.Collection<UUID> ids);
 
     @Query("""
         select j from ReviewJob j

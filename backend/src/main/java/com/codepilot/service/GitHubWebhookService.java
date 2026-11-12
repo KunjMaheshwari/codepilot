@@ -29,6 +29,7 @@ public class GitHubWebhookService {
     private static final String PULL_REQUEST_EVENT = "pull_request";
 
     private final WebhookDeliveryRepository deliveryRepository;
+    private final WebhookDeliveryStateService deliveryStateService;
     private final RepositoryRepository repositoryRepository;
     private final GitHubIntegrationService gitHubIntegrationService;
     private final ReviewService reviewService;
@@ -75,25 +76,21 @@ public class GitHubWebhookService {
 
     @Scheduled(fixedDelayString = "${codepilot.webhook.worker-delay-ms:1000}")
     public void processPendingEvents() {
-        List<WebhookDelivery> candidates = deliveryRepository
-                .findTop50ByProcessingStatusInAndNextAttemptAtLessThanEqualOrderByReceivedAtAsc(
-                        List.of("RECEIVED", "FAILED"), ZonedDateTime.now());
+        List<WebhookDelivery> candidates = deliveryStateService.findPendingDeliveries();
         for (WebhookDelivery candidate : candidates) {
-            if (deliveryRepository.claim(candidate.getId(), maxAttempts) == 1) {
-                process(candidate);
-            }
+            deliveryStateService.claim(candidate.getId(), maxAttempts).ifPresent(this::process);
         }
     }
 
     private void process(WebhookDelivery delivery) {
         try {
             if (!PULL_REQUEST_EVENT.equals(delivery.getEventType())) {
-                markIgnored(delivery, "UNSUPPORTED_EVENT", "Unsupported webhook event");
+                deliveryStateService.markIgnored(delivery, "UNSUPPORTED_EVENT", "Unsupported webhook event");
                 return;
             }
             if (!REVIEW_ACTIONS.contains(delivery.getAction())
                     && !"closed".equals(delivery.getAction())) {
-                markIgnored(delivery, "UNSUPPORTED_ACTION", "Unsupported pull request action");
+                deliveryStateService.markIgnored(delivery, "UNSUPPORTED_ACTION", "Unsupported pull request action");
                 return;
             }
             if (delivery.getRepositoryGithubId() == null || delivery.getPullRequestNumber() == null) {
@@ -104,7 +101,7 @@ public class GitHubWebhookService {
                     .findWithOwnerByGithubRepoId(delivery.getRepositoryGithubId())
                     .orElse(null);
             if (repository == null || repository.getOwner() == null) {
-                markIgnored(delivery, "UNLINKED_REPOSITORY", "Repository is not linked to CodePilot");
+                deliveryStateService.markIgnored(delivery, "UNLINKED_REPOSITORY", "Repository is not linked to CodePilot");
                 return;
             }
 
@@ -114,7 +111,7 @@ public class GitHubWebhookService {
             PullRequest pullRequest = gitHubIntegrationService.persistSynchronizedPullRequest(
                     repository, remotePullRequest);
             if ("closed".equals(delivery.getAction())) {
-                markProcessed(delivery);
+                deliveryStateService.markProcessed(delivery);
                 return;
             }
             if (pullRequest.getHeadSha() == null || pullRequest.getHeadSha().isBlank()) {
@@ -122,52 +119,10 @@ public class GitHubWebhookService {
             }
 
             reviewService.createReviewForWebhook(owner, repository, pullRequest);
-            markProcessed(delivery);
+            deliveryStateService.markProcessed(delivery);
         } catch (Exception exception) {
-            markFailed(delivery, exception);
+            deliveryStateService.markFailed(delivery, exception, maxAttempts, retryDelaySeconds);
         }
-    }
-
-    @Transactional
-    protected void markProcessed(WebhookDelivery delivery) {
-        delivery.setProcessingStatus("PROCESSED");
-        delivery.setProcessedAt(ZonedDateTime.now());
-        delivery.setNextAttemptAt(null);
-        deliveryRepository.save(delivery);
-        log.info("Processed GitHub webhook deliveryId={} eventType={} action={}",
-                delivery.getDeliveryId(), delivery.getEventType(), delivery.getAction());
-    }
-
-    @Transactional
-    protected void markIgnored(WebhookDelivery delivery, String category, String message) {
-        delivery.setProcessingStatus("IGNORED");
-        delivery.setErrorCategory(category);
-        delivery.setSafeErrorMessage(message);
-        delivery.setProcessedAt(ZonedDateTime.now());
-        delivery.setNextAttemptAt(null);
-        deliveryRepository.save(delivery);
-        log.info("Ignored GitHub webhook deliveryId={} eventType={} action={}",
-                delivery.getDeliveryId(), delivery.getEventType(), delivery.getAction());
-    }
-
-    @Transactional
-    protected void markFailed(WebhookDelivery delivery, Exception exception) {
-        delivery.setProcessingStatus("FAILED");
-        delivery.setErrorCategory("PROCESSING");
-        delivery.setSafeErrorMessage(safeMessage(exception));
-        delivery.setNextAttemptAt(delivery.getAttemptCount() < maxAttempts
-                ? ZonedDateTime.now().plusSeconds(retryDelaySeconds) : null);
-        deliveryRepository.save(delivery);
-        log.warn("GitHub webhook processing failed deliveryId={} eventType={} action={}",
-                delivery.getDeliveryId(), delivery.getEventType(), delivery.getAction());
-    }
-
-    private String safeMessage(Exception exception) {
-        String message = exception.getMessage();
-        if (message == null || message.isBlank()) {
-            return "Webhook processing failed";
-        }
-        return message.length() > 500 ? message.substring(0, 500) : message;
     }
 
     private String text(JsonNode root, String field) {

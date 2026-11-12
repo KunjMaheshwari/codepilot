@@ -16,7 +16,7 @@
     <description>Backend API for CodePilot AI Code Review SaaS</description>
 
     <properties>
-        <java.version>25</java.version>
+        <java.version>21</java.version>
         <byte-buddy.version>1.15.11</byte-buddy.version>
         <lombok.version>1.18.36</lombok.version>
         <mockito.version>5.14.2</mockito.version>
@@ -79,6 +79,16 @@
         <dependency>
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

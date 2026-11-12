@@ -1,11 +1,21 @@
 spring:
   application:
     name: codepilot
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
   datasource:
     url: ${DB_URL}
     username: ${DB_USERNAME}
     password: ${DB_PASSWORD}
     driver-class-name: org.postgresql.Driver
+    hikari:
+      pool-name: codepilot-hikari
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:10}
+      minimum-idle: ${DB_POOL_MIN_IDLE:2}
+      connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:5000}
+      validation-timeout: ${DB_VALIDATION_TIMEOUT_MS:3000}
+      idle-timeout: ${DB_IDLE_TIMEOUT_MS:300000}
+      max-lifetime: ${DB_MAX_LIFETIME_MS:1800000}
   jpa:
     hibernate:
       ddl-auto: validate
@@ -24,6 +34,8 @@ spring:
       password: ${REDIS_PASSWORD:}
       connect-timeout: ${REDIS_CONNECT_TIMEOUT:2s}
       timeout: ${REDIS_TIMEOUT:5s}
+      repositories:
+        enabled: false
   security:
     oauth2:
       client:
@@ -69,3 +81,6 @@ gemini:
 github:
   webhook:
     secret: ${GITHUB_WEBHOOK_SECRET:}
+
+server:
+  shutdown: graceful

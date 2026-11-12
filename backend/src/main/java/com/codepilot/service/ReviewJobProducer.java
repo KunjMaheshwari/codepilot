@@ -10,6 +10,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.beans.factory.annotation.Qualifier;
 
+import java.time.Duration;
+
 @Service
 @Slf4j
 public class ReviewJobProducer {
@@ -32,6 +34,9 @@ public class ReviewJobProducer {
 
     @Value("${codepilot.review.async.enabled:true}")
     private boolean enabled;
+
+    @Value("${codepilot.review.async.queued-recovery-seconds:60}")
+    private long queuedRecoverySeconds = 60;
 
     public void publish(ReviewJob job) {
         ReviewJobMessage message = new ReviewJobMessage(
@@ -60,6 +65,13 @@ public class ReviewJobProducer {
                 publish(job);
             } catch (RuntimeException ignored) {
                 log.warn("Pending review job {} remains unpublished", job.getId());
+            }
+        }
+        for (ReviewJob staleQueued : reviewJobService.findStaleQueuedJobs(Duration.ofSeconds(queuedRecoverySeconds))) {
+            try {
+                publish(staleQueued);
+            } catch (RuntimeException ignored) {
+                log.warn("Stale queued review job {} remains unpublished", staleQueued.getId());
             }
         }
     }

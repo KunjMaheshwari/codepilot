@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.ZonedDateTime;
 import java.util.List;
@@ -21,6 +22,7 @@ public interface WebhookDeliveryRepository extends JpaRepository<WebhookDelivery
             List<String> statuses, ZonedDateTime now);
 
     @Modifying
+    @Transactional
     @Query(value = """
         UPDATE webhook_deliveries
         SET processing_status = 'PROCESSING',

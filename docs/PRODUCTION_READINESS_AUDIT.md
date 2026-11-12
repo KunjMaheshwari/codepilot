@@ -1,0 +1,333 @@
+# CodePilot Production-Readiness Audit
+
+**Audit Date:** 2026-11-12  
+**Scope:** Full-stack audit of `/Users/kunjmaheshwari/Desktop/codepilot` (`backend/`, `frontend/`, database migrations, queue/worker infrastructure, AI/GitHub integrations, security, tests, and deployment readiness).  
+**Status:** Read-only audit (no source or configuration files modified).
+
+---
+
+## 1. Executive Summary
+
+CodePilot is **not ready for production** and **cannot reliably complete core end-to-end user flows in local development** without code and configuration fixes.
+
+While the repository has a clean architectural skeleton (Spring Boot 3.2.3 API + Redis-backed async job queue + PostgreSQL/Flyway + Gemini REST integration + Next.js 16 dashboard), multiple **P0 blockers** prevent a clean build, break authenticated frontend mutations, crash webhook processing on arrival, and break core user journeys:
+
+1. **Backend clean compilation fails** (`backend/pom.xml` specifies `<java.version>25</java.version>` on Java 23.0.2 and Spring Boot 3.2.3).
+2. **All mutating frontend API calls fail with `403 Forbidden`** because `SecurityConfig` requires CSRF (`XSRF-TOKEN` / `X-XSRF-TOKEN`) while `frontend/src/lib/api.ts` never sends `X-XSRF-TOKEN`, and `SecurityConfig` does not wire `.cors()`.
+3. **Hardcoded `http://localhost:3000`** in `SecurityConfig`, `WebConfig`, and `AuthController` breaks OAuth redirects and CORS in any non-local environment.
+4. **Webhook processing throws `TransactionRequiredException`** on the first webhook because `WebhookDeliveryRepository.claim(...)` is `@Modifying` without an active `@Transactional` boundary in `GitHubWebhookService.processPendingEvents()`.
+5. **Core user flows are incomplete:**
+   - No controller or UI triggers `GitHubIntegrationService.synchronizePullRequests(...)`, so newly synced repositories have **0 local pull requests** and users cannot trigger manual reviews from the UI.
+   - `ReviewsPage` never loads findings for already-completed reviews.
+   - `CodeReviewOrchestrator` saves findings only to PostgreSQL and **never posts review comments back to GitHub**.
+6. **Zero deployment infrastructure:** No `Dockerfile`, `docker-compose.yml`, `.env.example` (backend), or CI/CD workflows exist, and the root directory contains ~15 stray debug/scratch scripts and log files.
+
+---
+
+## 2. Architecture Overview
+
+```
+┌──────────────────────┐        HTTP + Cookies         ┌──────────────────────────────────┐
+│  Next.js 16 Frontend │ ────────────────────────────► │  Spring Boot 3.2.3 Backend       │
+│  (App Router, React  │   (Missing X-XSRF-TOKEN &     │  - Spring Security OAuth2        │
+│   19, Tailwind v4)   │    SecurityConfig .cors())    │  - REST Controllers (/api/v1/*)  │
+└──────────────────────┘                               │  - Webhook Receiver (/webhooks)  │
+                                                       └──────┬───────────────┬───────────┘
+                                                              │               │
+                 ┌────────────────────────────────────────────┘               │
+                 ▼                                                            ▼
+┌─────────────────────────────────┐                          ┌────────────────────────────┐
+│  PostgreSQL + Flyway (V1..V6)   │                          │  Redis (Lists:             │
+│  - users, connected_github_acct │                          │   review-jobs, processing, │
+│  - repositories, pull_requests  │                          │   dead-letter)             │
+│  - reviews, review_findings     │                          └────────────┬───────────────┘
+│  - review_jobs, webhook_deliv.  │                                       │
+└─────────────────────────────────┘                                       ▼
+                 ▲                                           ┌────────────────────────────┐
+                 │                                           │  @Scheduled Workers        │
+                 └───────────────────────────────────────────│  - ReviewJobWorker         │
+                                                             │  - ReviewJobProducer       │
+                                                             │  - GitHubWebhookService    │
+                                                             └──────┬──────────────┬──────┘
+                                                                    │              │
+                                                                    ▼              ▼
+                                                           ┌──────────────┐ ┌──────────────┐
+                                                           │  GitHub REST │ │ Google Gemini│
+                                                           │  API v3      │ │ v1beta API   │
+                                                           └──────────────┘ └──────────────┘
+```
+
+---
+
+## 3. Critical Issues (P0)
+
+### P0-1: Backend Clean Compilation Fails Due to Invalid `java.version` — **FIXED (Phase 2)**
+* **File/module affected:** `backend/pom.xml` (line 19)
+* **Exact problem:** `<java.version>25</java.version>` was configured while the environment runs Java 23.0.2 and Spring Boot `3.2.3`. Running `mvn clean test-compile -B` failed immediately with `Fatal error compiling: error: release version 25 not supported`.
+* **Fix applied:** Updated `<java.version>25</java.version>` to `<java.version>21</java.version>` (Java 21 LTS, supported by Spring Boot `3.2.3`, Lombok `1.18.36`, ByteBuddy `1.15.11`, and Mockito `5.14.2`).
+* **Verification:** `cd backend && mvn clean test -B`, `mvn verify -B`, and `mvn package -B` all succeeded without `-Djava.version` overrides (`javac [debug release 21]`, 55/55 tests passing).
+
+### P0-2: Frontend Mutations Blocked by Missing CSRF Token Header & Unwired Security CORS
+* **File/module affected:** `backend/src/main/java/com/codepilot/config/SecurityConfig.java` (lines 35–46), `backend/src/main/java/com/codepilot/config/WebConfig.java` (lines 24–31), `frontend/src/lib/api.ts` (lines 99–113)
+* **Exact problem:**
+  1. `SecurityConfig` enables CSRF via `CookieCsrfTokenRepository.withHttpOnlyFalse()` and `CsrfTokenRequestAttributeHandler()`, requiring `X-XSRF-TOKEN` on `POST`/`PUT`/`DELETE`. `frontend/src/lib/api.ts` sends `credentials: "include"` but **never reads `XSRF-TOKEN` from `document.cookie` or sends `X-XSRF-TOKEN`**.
+  2. `WebConfig` configures CORS via `WebMvcConfigurer.addCorsMappings`, but `SecurityConfig` does **not** call `.cors(Customizer.withDefaults())`. In Spring Security 6, unauthenticated/preflight `OPTIONS` requests hit the security filter chain before `WebMvcConfigurer` and are rejected with `401`/`403`.
+* **User/business impact:** Every mutating action from the frontend (`POST /api/v1/repositories/sync`, `POST /api/v1/repositories/{id}/reviews`, `DELETE /api/v1/auth/github`) fails with `403 Forbidden`, and cross-origin browser preflight requests fail.
+* **Recommended fix:** Add `.cors(Customizer.withDefaults())` and a `CorsConfigurationSource` bean in `SecurityConfig` driven by configurable allowed origins; update `frontend/src/lib/api.ts` to read the `XSRF-TOKEN` cookie and include `X-XSRF-TOKEN` on non-safe HTTP methods (and handle cross-subdomain cookie `Domain`/`SameSite=None; Secure` in production).
+* **Verification method:** Execute browser/integration tests performing `OPTIONS` preflight, `POST /api/v1/repositories/sync`, `POST /api/v1/repositories/{id}/reviews`, and `DELETE /api/v1/auth/github` from the frontend origin.
+
+### P0-3: Hardcoded `http://localhost:3000` in Production Backend Security & Controllers
+* **File/module affected:** `backend/src/main/java/com/codepilot/config/SecurityConfig.java` (line 51), `backend/src/main/java/com/codepilot/config/WebConfig.java` (line 27), `backend/src/main/java/com/codepilot/controller/AuthController.java` (line 28)
+* **Exact problem:** OAuth2 login `.defaultSuccessUrl("http://localhost:3000/dashboard", true)`, CORS `.allowedOrigins("http://localhost:3000")`, and `AuthController.githubCallback` redirect URI `http://localhost:3000/dashboard` are hardcoded.
+* **User/business impact:** In any staging or production deployment, GitHub OAuth login redirects users to `localhost:3000` and CORS blocks the production frontend origin.
+* **Recommended fix:** Externalize `codepilot.frontend.url` and `codepilot.cors.allowed-origins` in `application.yml` via environment variables (e.g., `${FRONTEND_URL:http://localhost:3000}`).
+* **Verification method:** Start backend with custom `FRONTEND_URL` and `CORS_ALLOWED_ORIGINS` and verify OAuth redirect `Location` header and CORS `Access-Control-Allow-Origin` match.
+
+### P0-4: Webhook Worker Crashes with `TransactionRequiredException` on First Delivery — **FIXED (Phase 3)**
+* **File/module affected:** `backend/src/main/java/com/codepilot/repository/WebhookDeliveryRepository.java` (line 25), `backend/src/main/java/com/codepilot/service/GitHubWebhookService.java` (line 82)
+* **Exact problem:** `WebhookDeliveryRepository.claim(...)` was a `@Modifying` native `UPDATE` query without `@Transactional`, throwing `TransactionRequiredException` when invoked from `GitHubWebhookService.processPendingEvents()`. Additionally, `processPendingEvents()` passed the stale pre-claim `candidate` entity (with `attemptCount` still 0) to `process(...)`.
+* **Fix applied:** Added `@Transactional` to `WebhookDeliveryRepository.claim(...)` and reloaded `WebhookDelivery` via `findById(candidate.getId())` after a successful claim so `attemptCount` reflects the incremented database value.
+* **Verification:** `PostgresRedisInfrastructureIntegrationTest.webhookDeliveryClaimAndProcessExecutesInTransaction` verified against `postgres:17-alpine`.
+
+### P0-5: Manual Pull Request Review Flow Is Broken End-to-End
+* **File/module affected:** `backend/src/main/java/com/codepilot/controller/RepositoryController.java`, `backend/src/main/java/com/codepilot/service/GitHubIntegrationService.java` (line 92), `frontend/src/app/dashboard/repositories/page.tsx` (lines 32–38, 82–113)
+* **Exact problem:**
+  1. `RepositoriesPage` calls `api.getPullRequests(repository.id)` (`GET /api/v1/repositories/{id}/pull-requests`), which queries only the local `pull_requests` table.
+  2. `GitHubIntegrationService.synchronizePullRequests(...)` exists in the backend, **but no controller endpoint invokes it**. `GET /api/v1/repositories/{id}/github-pull-requests` fetches from GitHub without persisting to PostgreSQL.
+  3. `POST /api/v1/repositories/{id}/reviews` requires a local `PullRequest.id` UUID.
+* **User/business impact:** After signing in and syncing repositories, a user sees `"No synchronized pull requests found."` and **cannot trigger a code review from the UI** unless a webhook has already arrived.
+* **Recommended fix:** Add `POST /api/v1/repositories/{id}/pull-requests/sync` calling `gitHubIntegrationService.synchronizePullRequests(...)` (or sync on demand when opening a repo / creating a review) and wire a "Sync Pull Requests" action in `RepositoriesPage`.
+* **Verification method:** End-to-end test: sync repos -> sync PRs -> trigger review -> verify `Review` and `ReviewJob` are created.
+
+---
+
+## 4. High-Priority Issues (P1)
+
+### P1-1: Pending Job Recovery Fails with `LazyInitializationException` — **FIXED (Phase 3)**
+* **File/module affected:** `backend/src/main/java/com/codepilot/repository/ReviewJobRepository.java` (line 17)
+* **Exact problem:** `findTop50ByStatusOrderByCreatedAtAsc("PENDING")` did not eager-fetch `review`, `review.pullRequest`, or `review.pullRequest.repository`, causing `LazyInitializationException` in `ReviewJobProducer.recoverPendingJobs()`.
+* **Fix applied:** Added `@EntityGraph(attributePaths = {"review", "review.pullRequest", "review.pullRequest.repository"})` to `findTop50ByStatusOrderByCreatedAtAsc`.
+* **Verification:** `PostgresRedisInfrastructureIntegrationTest.pendingJobRecoveryAndRedisQueueRoundTrip` verified on PostgreSQL 17 + Redis 7.
+
+### P1-2: Global Heartbeat Prevents Stale Job Recovery Across Workers — **FIXED (Phase 3)**
+* **File/module affected:** `backend/src/main/java/com/codepilot/service/ReviewJobWorker.java`, `backend/src/main/java/com/codepilot/service/ReviewJobService.java`, `backend/src/main/java/com/codepilot/repository/ReviewJobRepository.java`
+* **Exact problem:** `touchProcessingJobs()` updated `processing_heartbeat_at` for all `PROCESSING` rows globally, preventing stale-job recovery when another worker crashed.
+* **Fix applied:** Tracked `activeJobIds` (`ConcurrentHashMap.newKeySet()`) in `ReviewJobWorker` around `orchestrateReview(job)` and scoped `touchProcessingJobs(Collection<UUID> ids)` to `WHERE id IN (:ids) AND status = 'PROCESSING'`.
+* **Verification:** `PostgresRedisInfrastructureIntegrationTest.scopedHeartbeatOnlyTouchesSpecifiedProcessingJobs` verified only the specified job's heartbeat is updated.
+
+### P1-3: Single-Threaded `@Scheduled` Starvation & Blocking `Thread.sleep` in Worker — **PARTIALLY FIXED (Phase 3)**
+* **File/module affected:** `backend/src/main/java/com/codepilot/config/AsyncReviewConfig.java`, `backend/src/main/java/com/codepilot/service/ReviewJobWorker.java` (line 86)
+* **Fix applied:** Configured a `ThreadPoolTaskScheduler` bean (`poolSize=4`, `waitForTasksToCompleteOnShutdown=true`, `awaitTerminationSeconds=20`) in `AsyncReviewConfig` and enabled `server.shutdown: graceful` (`30s` phase timeout) in `application.yml`.
+* **Remaining limitation:** `ReviewJobWorker.poll()` still uses `Thread.sleep(...)` on retry; replacing it with a non-blocking Redis ZSET delayed queue is deferred.
+
+### P1-4: Stale `attemptCount` and Self-Invoked `@Transactional` in `GitHubWebhookService`
+* **File/module affected:** `backend/src/main/java/com/codepilot/service/GitHubWebhookService.java` (lines 81–84, 131–163)
+* **Exact problem:**
+  1. `deliveryRepository.claim(candidate.getId(), maxAttempts)` increments `attempt_count` in PostgreSQL, not on the in-memory `candidate` object. `markFailed(delivery, ...)` checks `delivery.getAttemptCount() < maxAttempts` using the stale count (allowing an extra retry beyond `maxAttempts` and persisting the stale `attemptCount` on `save(delivery)`).
+  2. `process()` calls `this.markProcessed(...)`, `this.markIgnored(...)`, and `this.markFailed(...)` via internal self-invocation, bypassing Spring's `@Transactional` proxy.
+* **User/business impact:** Webhook retry counts are corrupted in the database (`save(delivery)` overwrites the incremented `attempt_count` back to `0`!).
+* **Recommended fix:** Reload `WebhookDelivery` after `claim(...)` or perform status/error updates via dedicated `@Modifying` queries or a separate transactional helper bean.
+* **Verification method:** Integration test simulating `maxAttempts` consecutive webhook failures and asserting `attempt_count` increments monotonically and stops retrying at `maxAttempts`.
+
+### P1-5: AI Findings Are Never Posted Back to GitHub Pull Requests
+* **File/module affected:** `backend/src/main/java/com/codepilot/service/CodeReviewOrchestrator.java` (lines 58–70), `backend/src/main/java/com/codepilot/service/GitHubApiClient.java`, `backend/src/main/java/com/codepilot/service/GitHubIntegrationService.java`
+* **Exact problem:** `CodeReviewOrchestrator` persists `ReviewFinding` rows to PostgreSQL, but neither `GitHubApiClient` nor `GitHubIntegrationService` has any method to post PR reviews or comments to GitHub (`POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews`).
+* **User/business impact:** The core SaaS value proposition ("automated AI code reviews on GitHub PRs") does not deliver feedback to GitHub; developers must open the CodePilot web UI to see anything.
+* **Recommended fix:** Implement `createPullRequestReview(...)` in `GitHubApiClient` / `GitHubIntegrationService` and post a summary + inline comments (with graceful fallback to issue comment if line mapping fails) after `findingRepository.saveAll(findings)`.
+* **Verification method:** WireMock/integration test verifying `POST /repos/{owner}/{repo}/pulls/{number}/reviews` is called with validated findings.
+
+### P1-6: `ReviewsPage` Never Loads Findings for Completed Reviews
+* **File/module affected:** `frontend/src/app/dashboard/reviews/page.tsx` (lines 21–34, 55–73)
+* **Exact problem:** `api.getFindings(review.id)` is only called inside the polling `useEffect` when an active review transitions out of `activeStatuses`. When a user navigates to `/dashboard/reviews` after a review is already `COMPLETED` or `PARTIAL`, `findings[review.id]` is `undefined` and there is no button or effect to load findings.
+* **User/business impact:** Users cannot view AI review findings for any completed review in the UI.
+* **Recommended fix:** Fetch `api.getFindings(review.id)` on expand/click (or eagerly for visible completed/partial reviews) and add a loading/error state per review card.
+* **Verification method:** Playwright/RTL test rendering `ReviewsPage` with a `COMPLETED` review and verifying findings are fetched and displayed.
+
+### P1-7: `test` Profile With Hardcoded Encryption Key Ships Inside Production Artifact — **FIXED (Phase 2)**
+* **File/module affected:** `backend/src/main/resources/application-test.yml` -> moved to `backend/src/test/resources/application-test.yml`
+* **Exact problem:** `application-test.yml` was located in `src/main/resources/` instead of `src/test/resources/`, causing H2 test config and the hardcoded test encryption key to be packaged into the production JAR.
+* **Fix applied:** Moved `application-test.yml` from `backend/src/main/resources/` to `backend/src/test/resources/`.
+* **Verification:** Inspected `backend/target/backend-0.0.1-SNAPSHOT.jar` via `jar tf`; only `BOOT-INF/classes/application.yml` is packaged (`application-test.yml` is excluded), and all 55 tests continue to pass under the `test` profile.
+
+### P1-8: `ReviewResponseValidator` Aborts Entire Review on Single Line-Number Off-by-One or Long Title
+* **File/module affected:** `backend/src/main/java/com/codepilot/ai/ReviewResponseValidator.java` (lines 67, 112–121)
+* **Exact problem:**
+  1. `isValidFinding` throws `IllegalArgumentException("Finding references a non-added line")` if *any* single finding from Gemini has a line number not in `file.getAddedLines()` (a very common LLM off-by-one error), failing the entire review.
+  2. `title` is not truncated to `255` chars (the DB `VARCHAR(255)` limit in `V1__init_schema.sql`), risking `DataIntegrityViolationException` on `saveAll`.
+* **User/business impact:** Valid findings are discarded and entire reviews fail intermittently due to minor LLM formatting/line-offset quirks.
+* **Recommended fix:** Filter out/log invalid findings instead of failing the whole batch (or snap to nearest diff line if within +/-2 lines), and enforce/truncate `title` (<= 255) and `filePath` (<= 1024) before persistence.
+* **Verification method:** Unit test with mixed valid/invalid findings and >255-char title verifying valid findings are preserved and saved.
+
+---
+
+## 5. Medium-Priority Issues (P2)
+
+### P2-1: `SecurityConfig` Identifies Users by Email Instead of Immutable `githubUserId`
+* **File/module affected:** `backend/src/main/java/com/codepilot/config/SecurityConfig.java` (lines 63–78), `backend/src/main/java/com/codepilot/service/RepositoryService.java` (lines 56–67)
+* **Exact problem:** OAuth login and `RepositoryService.getAuthenticatedUser()` resolve users by `email` (falling back to `<login>@users.noreply.github.com` when GitHub email is private). If a user changes their GitHub username or primary email, a new `User` row is created or `linkAccount` throws `"GitHub account is already connected to another user"`.
+* **User/business impact:** Users with private or changed GitHub emails get locked out or lose access to their repositories.
+* **Recommended fix:** Resolve the authenticated `User` via `ConnectedGitHubAccountRepository.findByGithubUserId(githubUserId)` first, falling back to email only on initial registration.
+* **Verification method:** Test OAuth login with `email = null` followed by username/email change, verifying the same `User` record is resolved.
+
+### P2-2: Unused `ReviewSettings` Entity & Missing Settings Enforcement
+* **File/module affected:** `backend/src/main/java/com/codepilot/model/ReviewSettings.java`, `backend/src/main/java/com/codepilot/repository/ReviewSettingsRepository.java`, `backend/src/main/java/com/codepilot/service/CodeReviewOrchestrator.java`, `frontend/src/app/dashboard/settings/page.tsx`
+* **Exact problem:** `review_settings` table (`auto_review_enabled`, `strict_mode`) exists in Flyway `V1` and JPA, but no controller, service, webhook check, prompt builder, or frontend UI reads or updates it.
+* **User/business impact:** Users cannot disable auto-reviews per repository or toggle strict mode.
+* **Recommended fix:** Add `GET/PUT /api/v1/repositories/{id}/settings`, check `autoReviewEnabled` in `GitHubWebhookService`, pass `strictMode` to `ReviewPromptBuilder`, and expose controls on `SettingsPage`.
+* **Verification method:** Integration test toggling `autoReviewEnabled=false` and verifying webhook skips review creation.
+
+### P2-3: `GlobalExceptionHandler` Swallows 500 Exceptions Without Logging
+* **File/module affected:** `backend/src/main/java/com/codepilot/exception/GlobalExceptionHandler.java` (lines 65–75)
+* **Exact problem:** `handleGlobalException(Exception ex, WebRequest request)` returns `500 Internal Server Error` without logging `ex`.
+* **User/business impact:** Production 500 errors leave zero stack traces or diagnostics in server logs.
+* **Recommended fix:** Add `@Slf4j` and `log.error("Unhandled exception for request {}", path, ex);`.
+* **Verification method:** Trigger an unhandled runtime exception in a `@WebMvcTest` and verify stack trace is logged.
+
+### P2-4: `CodeReviewOrchestrator` Does Not Set `Review.startedAt` / `completedAt` in Async Mode
+* **File/module affected:** `backend/src/main/java/com/codepilot/service/CodeReviewOrchestrator.java` (lines 35–82)
+* **Exact problem:** `ReviewService` only sets `startedAt`/`completedAt` in synchronous mode (`asyncEnabled=false`). In async mode, `orchestrateReview` updates `review.status` (`COMPLETED`/`PARTIAL`/`FAILED`) without setting `review.startedAt` or `review.completedAt`.
+* **User/business impact:** Review duration and completion timestamps are always `null` (`"—"`) in the UI and API responses.
+* **Recommended fix:** Set `review.setStartedAt(ZonedDateTime.now())` when transitioning to `PROCESSING` and `review.setCompletedAt(ZonedDateTime.now())` on completion/failure, and save `review` when transitioning to `PROCESSING`.
+* **Verification method:** Run `CodeReviewOrchestratorTest` and assert `startedAt` and `completedAt` are populated.
+
+### P2-5: Repository Sync Only Fetches Page 1 (Max 100) and Never Deactivates Removed Repos
+* **File/module affected:** `backend/src/main/java/com/codepilot/controller/RepositoryController.java` (lines 52–58), `backend/src/main/java/com/codepilot/service/GitHubIntegrationService.java` (lines 67–74)
+* **Exact problem:** `POST /api/v1/repositories/sync` only syncs a single page (`page=1, perPage=100`). Users with >100 repositories never see the rest, and `lastSyncedAt` is set *after* `upsertRepository` (relying on dirty checking rather than explicit save if detached).
+* **User/business impact:** Organizations/users with >100 repos cannot access older repositories.
+* **Recommended fix:** Paginate through GitHub `/user/repos` (up to a safe cap) during sync.
+* **Verification method:** Mock 2 pages of GitHub repos in `GitHubIntegrationServiceTest` and verify all are persisted.
+
+### P2-6: Default Gemini Model `gemini-1.5-pro` & Unbounded Prompt Token Size
+* **File/module affected:** `backend/src/main/resources/application.yml` (line 67), `backend/src/main/java/com/codepilot/ai/GeminiCodeReviewProvider.java` (line 40), `backend/src/main/java/com/codepilot/ai/ReviewPromptBuilder.java` (lines 35–46)
+* **Exact problem:** Default model is `gemini-1.5-pro` (older/deprecated on `v1beta` for newer projects), and `ReviewPromptBuilder` concatenates all reviewable files up to 2MB (`max-diff-bytes`) into a single prompt without chunking or token-budget truncation, risking 400 payload-too-large or 60s read timeouts.
+* **User/business impact:** Large PRs fail with Gemini timeouts or model-not-found errors.
+* **Recommended fix:** Default to a current supported model (e.g., `gemini-2.5-flash` or `gemini-2.5-pro`) and chunk/batch files by character/token budget.
+* **Verification method:** Unit test `ReviewPromptBuilder` with >200KB diff verifying bounded prompt chunks.
+
+### P2-7: Spring Data JPA/Redis Repository Scanning Ambiguity
+* **File/module affected:** `backend/src/main/java/com/codepilot/CodePilotApplication.java`, `backend/src/main/java/com/codepilot/config/RedisConfig.java`
+* **Exact problem:** Both `spring-boot-starter-data-jpa` and `spring-boot-starter-data-redis` are on the classpath without `@EnableJpaRepositories` / `@EnableRedisRepositories` scoping, causing Spring Data Redis to scan all 9 JPA repositories at startup and emit warnings.
+* **User/business impact:** Noisy startup logs and slower context initialization; risk of repository binding conflicts if Redis repositories are added later.
+* **Recommended fix:** Add `@EnableJpaRepositories(basePackages = "com.codepilot.repository")` on a JPA config class and disable Redis repositories (`spring.data.redis.repositories.enabled=false`).
+* **Verification method:** Start application/tests and verify `Spring Data Redis - Could not safely identify store assignment` warnings disappear.
+
+---
+
+## 6. Low-Priority Issues (P3)
+
+### P3-1: Dead Code & Unused Services/Components
+* **File/module affected:** `backend/src/main/java/com/codepilot/service/MockAiReviewEngine.java`, `backend/src/main/java/com/codepilot/controller/AuthController.java` (`githubCallback`), `backend/src/dto/` (empty directory), root scratch files (`clean_workspace.sh`, `find_files.js`, `fix.js`, `generate_missing.sh`, `run_compile_11.js`, `show*.txt`, `commit_res.txt`, `full_git_log.txt`, `git_status_debug.txt`, `test_find.txt`, `backend/mvn_output*.log`).
+* **Exact problem:** Unused `MockAiReviewEngine` `@Service`, unreachable `/api/v1/auth/github/callback` endpoint, empty `backend/src/dto`, and 15+ temporary scripts/logs committed in the repo root.
+* **User/business impact:** Confusion for maintainers and bloated repository.
+* **Recommended fix:** Remove dead code, empty directories, and scratch scripts/logs; add `*.log` to `.gitignore`.
+* **Verification method:** `git status` and `mvn test` after cleanup.
+
+### P3-2: Non-Functional UI Controls & Missing Logout/Auth Redirect
+* **File/module affected:** `frontend/src/components/layout/header.tsx` (lines 39–59), `frontend/src/app/page.tsx` (lines 19–21, 37, 89–95), `frontend/src/components/dashboard/recent-reviews.tsx` (lines 21–25)
+* **Exact problem:**
+  1. Header bell button, "Settings", and "Support" menu items do nothing; no Logout button or user identity is shown.
+  2. Landing page uses `<Link href={githubLoginUrl}>` (Next.js client Link) instead of `<a>` for external OAuth redirect, and has dead `#`/placeholder links for Pricing, Terms, and Privacy.
+  3. `RecentReviews` has no icon for `PARTIAL` status and displays raw UUID prefixes instead of PR title/number.
+* **User/business impact:** Poor UX and dead clicks.
+* **Recommended fix:** Use `<a href={githubLoginUrl}>`, wire header dropdown navigation + logout, add `PARTIAL` status icon, and enrich `ReviewDto` with PR number/title and repo name.
+* **Verification method:** Manual UI walkthrough and ESLint/Playwright checks.
+
+### P3-3: Next.js Build Warning for Parent `pnpm-lock.yaml`
+* **File/module affected:** `frontend/next.config.ts`
+* **Exact problem:** `npm run build` warns: `Next.js ignored pnpm-lock.yaml in /Users/kunjmaheshwari because it is outside the current Git repository`.
+* **User/business impact:** Build environment ambiguity when parent directories have lockfiles.
+* **Recommended fix:** Set `turbopack.root` in `next.config.ts` or ensure clean workspace isolation.
+* **Verification method:** `cd frontend && npm run build` without root warning.
+
+---
+
+## 7. Broken and Incomplete User Flows
+
+| Flow | Current State | Where It Breaks |
+| :--- | :--- | :--- |
+| **1. GitHub OAuth Sign-In (Prod)** | Broken | `SecurityConfig` redirects to `http://localhost:3000/dashboard`; `WebConfig` only allows `localhost:3000`. |
+| **2. Sync Repositories** | Broken in Browser | `POST /api/v1/repositories/sync` fails with `403` because `api.ts` omits `X-XSRF-TOKEN` and `SecurityConfig` lacks `.cors()`. |
+| **3. Manual PR Review** | Broken | No endpoint/UI syncs PRs to DB (`synchronizePullRequests` is unused); UI shows 0 PRs. |
+| **4. Webhook-Triggered Review** | Broken | `GitHubWebhookService.processPendingEvents()` calls `@Modifying claim()` without `@Transactional` -> `TransactionRequiredException`. |
+| **5. Async Job Recovery** | Broken | `ReviewJobProducer.recoverPendingJobs()` hits `LazyInitializationException`; `heartbeat()` touches all `PROCESSING` jobs globally. |
+| **6. Post Review to GitHub** | Missing | `CodeReviewOrchestrator` never calls GitHub API to post review comments. |
+| **7. View Completed Findings** | Broken | `ReviewsPage` only fetches findings when a polled active job finishes, never for already-completed reviews. |
+| **8. Repo Review Settings** | Incomplete | `ReviewSettings` entity/table exists but has no API, orchestrator integration, or UI. |
+| **9. Sign Out** | Missing | No logout endpoint or UI button. |
+
+---
+
+## 8. Security Findings
+
+1. **Missing CSRF Token in Frontend + Missing `.cors()` in `SecurityConfig` (High):** Causes all browser mutations to fail with `403`, and in production cross-domain setups (`app.domain` vs `api.domain`), `CookieCsrfTokenRepository` without `SameSite=None; Secure` and `Domain` will prevent JS from reading `XSRF-TOKEN`.
+2. **Swagger UI & OpenAPI Publicly Exposed (Medium):** `SecurityConfig.java:43-44` permits `/swagger-ui/**`, `/v3/api-docs/**`, and `/swagger-ui.html` for unauthenticated users in all profiles, leaking full API schema in production.
+3. **Hardcoded Test Encryption Key in `src/main/resources/application-test.yml` (High):** Packaged in production JAR; activating `test` profile exposes a known AES-256 key and H2 DB.
+4. **Global Single Webhook Secret (Medium):** `GitHubWebhookSignatureVerifier` uses one `GITHUB_WEBHOOK_SECRET` for all repositories and fails startup outside `test` profile if unset, rather than supporting GitHub App installation secrets or per-repo secrets.
+5. **Prompt Injection Defense (Good, Needs Hardening):** `ReviewPromptBuilder` includes an explicit untrusted-data directive, and `ReviewResponseValidator` validates schema/file/line membership, though `suggestedFix` and `description` are rendered in React as plain text (safe from XSS) — ensure Markdown/code rendering never uses `dangerouslySetInnerHTML`.
+6. **Tenant Isolation (Good):** `RepositoryService`, `PullRequestService`, `ReviewService`, and `DashboardService` consistently scope queries by `ownerId` / `getAuthenticatedUser().getId()`.
+7. **Token Encryption (Good):** `EncryptionService` uses AES-256-GCM with 12-byte random `SecureRandom` nonce and 128-bit auth tag (`v2:` prefix).
+
+---
+
+## 9. Build and Test Results (Actual Evidence)
+
+### Backend (Updated After Phase 3 PostgreSQL, Flyway & Redis Infrastructure Fixes)
+* **`cd backend && mvn clean test -B && mvn verify -B`:** **PASSED** (exit code 0; `Tests run: 62, Failures: 0, Errors: 0, Skipped: 0`).
+  * **Unit tests (53):** Existing 50 unit tests + 3 new `StartupConfigurationValidatorTest` cases.
+  * **H2/Spring Boot integration tests (5):** `CodePilotApplicationTests` (1), `AiReviewEngineIntegrationTest` (3), `RepositoryControllerTest` (1).
+  * **PostgreSQL 17 + Redis 7 Testcontainers infrastructure tests (4):** `PostgresRedisInfrastructureIntegrationTest` (Flyway V1–V6 migration verification on `postgres:17-alpine`, JPA + `ReviewJobProducer` + `redis:7-alpine` queue round-trip, scoped heartbeat, and transactional `WebhookDelivery` claim/processing).
+* **Infrastructure & Config Hardening Applied:**
+  * HikariCP pool & timeout settings (`maximum-pool-size`, `minimum-idle`, `connection-timeout`, `validation-timeout`, `idle-timeout`, `max-lifetime`) and `server.shutdown: graceful` added to `application.yml`.
+  * `spring.data.redis.repositories.enabled: false` added to `application.yml` to eliminate Spring Data Redis scanning ambiguity.
+  * `Repository.defaultBranch` column length aligned to `255` matching `V3__add_github_metadata.sql`.
+  * `StartupConfigurationValidator` added to fail fast with clear missing env-var names outside the `test` profile.
+* **Remaining Infrastructure Limitations:**
+  * `GitHubWebhookService` still uses `@Scheduled` DB polling + self-invoked `@Transactional` status helpers (`markProcessed`/`markIgnored`/`markFailed`).
+  * `ReviewJobWorker.poll()` still uses `Thread.sleep` on retry instead of a Redis delayed ZSET.
+  * `docker-compose.yml` and production `Dockerfile`s are not yet created (deferred to Phase 6).
+
+### Frontend
+* **Lint & Production Build (`cd frontend && npm run lint && npm run build`):** **PASSED** (exit code 0)
+  * ESLint passed with 0 errors.
+  * `next build` (Next.js 16.4.5 Turbopack) compiled TypeScript and generated 8 static routes (`/`, `/_not-found`, `/dashboard`, `/dashboard/repositories`, `/dashboard/reviews`, `/dashboard/settings`).
+* **Frontend Unit / Integration / E2E Tests:** **NONE** (`package.json` has no `test` script; no Jest, Vitest, RTL, or Playwright tests exist).
+
+---
+
+## 10. Dependency and Configuration Problems
+
+| Component | Problem |
+| :--- | :--- |
+| `backend/pom.xml` | `<java.version>25</java.version>` incompatible with JDK 23 and Spring Boot 3.2.3. |
+| `backend/src/main/resources/application.yml` | Requires `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `ENCRYPTION_KEY`, `GEMINI_API_KEY`, `GITHUB_WEBHOOK_SECRET` with no `.env.example` documenting them; `baseline-on-migrate: true` can mask unversioned DBs. |
+| `backend/src/main/resources/application-test.yml` | Located in `src/main/resources` instead of `src/test/resources`. |
+| `frontend/package.json` | Lists `"cn": "^0.5.2"` and `"shadcn": "^4.23.0"` in runtime `dependencies`; no test runner configured. |
+| Docker / CI/CD | **Missing:** No `Dockerfile` (backend or frontend), no `docker-compose.yml` (Postgres + Redis + Backend + Frontend), no GitHub Actions CI workflow (`.github/` only contains `.github/modernize/java-upgrade/` hooks). |
+
+---
+
+## 11. Recommended Remediation Sequence
+
+1. **Unblock Build & Config (Day 1):** Fix `java.version` to `21` in `pom.xml`; move `application-test.yml` to `src/test/resources`; add root `.env.example` and `docker-compose.yml` (Postgres 16 + Redis 7).
+2. **Fix Security, CORS & CSRF (Day 1–2):** Add `.cors(...)` + configurable `FRONTEND_URL` / `CORS_ALLOWED_ORIGINS` in `SecurityConfig` and `WebConfig`; send `X-XSRF-TOKEN` in `frontend/src/lib/api.ts`; resolve OAuth user by `githubUserId`; restrict Swagger UI to non-prod profiles.
+3. **Fix Webhook & Async Worker Reliability (Day 2–3):** Add `@Transactional` to `WebhookDeliveryRepository.claim(...)`; reload `WebhookDelivery` after `claim` and remove self-invocation `@Transactional`; add `@EntityGraph` to `findPendingJobs`; scope `touchProcessingJobs` to active worker jobs; add `ThreadPoolTaskScheduler` and remove `Thread.sleep` from `poll()`.
+4. **Complete Core Review Flows (Day 3–5):** Add `POST /api/v1/repositories/{id}/pull-requests/sync` + UI trigger; implement GitHub PR review comment posting in `GitHubApiClient`/`CodeReviewOrchestrator`; fix `ReviewsPage` to load findings for completed reviews; harden `ReviewResponseValidator` against off-by-one lines and long titles; update default Gemini model.
+5. **Testing & Deployment Readiness (Day 5–7):** Add Testcontainers (PostgreSQL + Redis) integration tests for Flyway, `ReviewJobWorker`, and `GitHubWebhookService`; add Playwright/Vitest frontend tests; add `Dockerfile`s and GitHub Actions CI (`mvn test`, `npm run lint && npm run build`).
+
+---
+
+## 12. Final Production-Readiness Score
+
+**Score: 32 / 100 (Not Production-Ready)**
+
+| Category | Score | Justification |
+| :--- | :---: | :--- |
+| Build & Dependencies | 3/10 | Clean backend build fails (`java.version=25`); test config ships in main resources. |
+| Database & Migrations | 7/10 | Clean Flyway V1–V6 schema and indexes, but untested against real Postgres in CI. |
+| Queue, Workers & Recovery | 3/10 | Good Redis RPOPLPUSH pattern on paper, broken by `LazyInitializationException`, global heartbeat, and single-thread `Thread.sleep`. |
+| GitHub & Webhooks | 3/10 | Webhook crashes with `TransactionRequiredException`; no PR sync endpoint; no PR comment posting. |
+| Gemini AI Integration | 6/10 | Good prompt-injection defense and schema validation, but brittle on single-line off-by-one and outdated default model. |
+| Security & Auth | 4/10 | Good AES-GCM encryption and tenant isolation, but broken CSRF/CORS, hardcoded `localhost:3000`, public Swagger, email-based identity. |
+| Frontend UX & Integration | 3/10 | Clean UI shell, but mutations fail 403, PRs don't sync, completed findings aren't fetched. |
+| Tests & CI/CD | 3/10 | 55 H2/mocked backend tests; 0 frontend tests; 0 E2E tests; no Docker or CI/CD. |
+

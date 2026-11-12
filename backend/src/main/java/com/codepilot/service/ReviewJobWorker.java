@@ -11,6 +11,9 @@ import org.springframework.beans.factory.annotation.Qualifier;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import com.fasterxml.jackson.core.JsonProcessingException;
 
 @Service
@@ -22,6 +25,7 @@ public class ReviewJobWorker {
     private final ReviewJobService reviewJobService;
     private final CodeReviewOrchestrator orchestrator;
     private final ReviewJobRepositoryFacade jobRepository;
+    private final Set<UUID> activeJobIds = ConcurrentHashMap.newKeySet();
 
     public ReviewJobWorker(
             @Qualifier("reviewRedisTemplate") RedisTemplate<String, String> redisTemplate,
@@ -80,7 +84,12 @@ public class ReviewJobWorker {
                 acknowledge(payload);
                 return;
             }
-            orchestrator.orchestrateReview(job);
+            activeJobIds.add(job.getId());
+            try {
+                orchestrator.orchestrateReview(job);
+            } finally {
+                activeJobIds.remove(job.getId());
+            }
             if ("FAILED".equals(job.getStatus()) && job.getAttemptCount() < maxAttempts) {
                 reviewJobService.markRetrying(job, job.getErrorMessage());
                 Thread.sleep(Math.min(1000L * (1L << Math.min(job.getAttemptCount(), 5)), 30000L));
@@ -99,8 +108,8 @@ public class ReviewJobWorker {
 
     @Scheduled(fixedDelayString = "${codepilot.review.async.heartbeat-interval-ms:10000}")
     public void heartbeat() {
-        if (enabled) {
-            reviewJobService.touchProcessingJobs();
+        if (enabled && !activeJobIds.isEmpty()) {
+            reviewJobService.touchProcessingJobs(activeJobIds);
         }
     }
 

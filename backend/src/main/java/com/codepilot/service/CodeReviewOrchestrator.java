@@ -14,6 +14,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.time.ZonedDateTime;
 import java.util.List;
 
 @Service
@@ -40,6 +41,11 @@ public class CodeReviewOrchestrator {
             PullRequest pr = review.getPullRequest();
 
             reviewJobService.updateStatus(job, "PROCESSING");
+            review.setStatus("PROCESSING");
+            if (review.getStartedAt() == null) {
+                review.setStartedAt(ZonedDateTime.now());
+            }
+            reviewRepository.save(review);
 
             String diff = githubService.getPullRequestDiff(pr.getRepository().getOwner(), pr.getRepository(), pr.getPrNumber());
             List<DiffParser.ParsedFile> parsedFiles = diffParser.parseDiff(diff);
@@ -63,19 +69,21 @@ public class CodeReviewOrchestrator {
             }
 
             review.setStatus(reviewableFiles.size() == parsedFiles.size() ? "COMPLETED" : "PARTIAL");
+            review.setCompletedAt(ZonedDateTime.now());
             reviewRepository.save(review);
 
             reviewJobService.updateStatus(job, review.getStatus());
-            log.info("Review orchestration completed successfully for job ID: {} correlationId={}",
-                    job.getId(), job.getCorrelationId());
+            log.info("Review orchestration completed jobId={} reviewId={} status={} correlationId={}",
+                    job.getId(), review.getId(), review.getStatus(), job.getCorrelationId());
         } catch (Exception e) {
-            log.error("Failed to orchestrate review for job ID: {} correlationId={}",
+            log.error("Failed to orchestrate review jobId={} correlationId={}",
                     job.getId(), job.getCorrelationId(), e);
             reviewJobService.markFailed(job, e.getMessage());
 
             Review review = job.getReview();
             if (review != null) {
                 review.setStatus("FAILED");
+                review.setCompletedAt(ZonedDateTime.now());
                 reviewRepository.save(review);
             }
         }

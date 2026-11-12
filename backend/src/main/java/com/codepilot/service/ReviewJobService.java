@@ -52,10 +52,14 @@ public class ReviewJobService {
 
     @Transactional
     public void markFailed(ReviewJob job, String reason) {
+        if (isTerminal(job.getStatus()) && !"FAILED".equals(job.getStatus())) {
+            throw new IllegalStateException("Cannot mark terminal review job as FAILED");
+        }
         job.setStatus("FAILED");
         job.setErrorMessage(safeReason(reason));
         job.setLastErrorCategory("PROCESSING");
         job.setCompletedAt(ZonedDateTime.now());
+        job.setProcessingHeartbeatAt(null);
         reviewJobRepository.save(job);
     }
 
@@ -65,8 +69,11 @@ public class ReviewJobService {
     }
 
     @Transactional
-    public int touchProcessingJobs() {
-        return reviewJobRepository.touchProcessingJobs();
+    public int touchProcessingJobs(java.util.Collection<UUID> jobIds) {
+        if (jobIds == null || jobIds.isEmpty()) {
+            return 0;
+        }
+        return reviewJobRepository.touchProcessingJobs(jobIds);
     }
 
     @Transactional(readOnly = true)
@@ -95,18 +102,28 @@ public class ReviewJobService {
 
     @Transactional
     public void markQueued(ReviewJob job) {
+        if (!isAllowedTransition(job.getStatus(), "QUEUED")) {
+            throw new IllegalStateException("Invalid review job state transition");
+        }
         job.setStatus("QUEUED");
         reviewJobRepository.save(job);
     }
 
     @Transactional
     public void markPending(ReviewJob job) {
+        if (!isAllowedTransition(job.getStatus(), "PENDING")) {
+            throw new IllegalStateException("Invalid review job state transition");
+        }
         job.setStatus("PENDING");
+        job.setProcessingHeartbeatAt(null);
         reviewJobRepository.save(job);
     }
 
     @Transactional
     public void markRetrying(ReviewJob job, String reason) {
+        if (!isAllowedTransition(job.getStatus(), "RETRYING")) {
+            throw new IllegalStateException("Invalid review job state transition");
+        }
         job.setStatus("RETRYING");
         job.setErrorMessage(safeReason(reason));
         job.setLastErrorCategory("RETRYABLE");
@@ -117,6 +134,11 @@ public class ReviewJobService {
     @Transactional(readOnly = true)
     public List<ReviewJob> findPendingJobs() {
         return reviewJobRepository.findTop50ByStatusOrderByCreatedAtAsc("PENDING");
+    }
+
+    @Transactional(readOnly = true)
+    public List<ReviewJob> findStaleQueuedJobs(Duration timeout) {
+        return reviewJobRepository.findStaleQueuedJobs(ZonedDateTime.now().minus(timeout));
     }
 
     @Transactional(readOnly = true)
@@ -131,15 +153,27 @@ public class ReviewJobService {
         return reason.length() > 500 ? reason.substring(0, 500) : reason;
     }
 
+    private boolean isTerminal(String status) {
+        return "COMPLETED".equals(status) || "PARTIAL".equals(status) || "FAILED".equals(status);
+    }
+
     private boolean isAllowedTransition(String current, String next) {
-        if (current != null && current.equals(next)) {
+        if (current == null) {
+            return "PENDING".equals(next);
+        }
+        if (current.equals(next)) {
             return true;
+        }
+        if (isTerminal(current)) {
+            return false;
         }
         return switch (current) {
             case "PENDING" -> "QUEUED".equals(next) || "PROCESSING".equals(next);
-            case "QUEUED", "RETRYING" -> "PROCESSING".equals(next);
+            case "QUEUED" -> "PROCESSING".equals(next) || "PENDING".equals(next);
+            case "RETRYING" -> "QUEUED".equals(next) || "PROCESSING".equals(next) || "PENDING".equals(next);
             case "PROCESSING" -> "COMPLETED".equals(next)
-                    || "PARTIAL".equals(next) || "FAILED".equals(next);
+                    || "PARTIAL".equals(next) || "FAILED".equals(next)
+                    || "RETRYING".equals(next) || "PENDING".equals(next);
             default -> false;
         };
     }
