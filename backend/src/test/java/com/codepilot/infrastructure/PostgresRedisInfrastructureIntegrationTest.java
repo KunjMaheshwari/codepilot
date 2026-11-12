@@ -94,7 +94,7 @@ class PostgresRedisInfrastructureIntegrationTest {
 
     @Test
     void flywayMigrationsAppliedCleanlyOnPostgres17() {
-        assertThat(flyway.info().applied()).hasSize(6);
+        assertThat(flyway.info().applied()).hasSize(7);
     }
 
     @Test

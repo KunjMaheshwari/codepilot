@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -12,11 +13,15 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Component
 @RequiredArgsConstructor
+@Slf4j
 public class ReviewResponseValidator {
 
+    private static final int MAX_TITLE_LENGTH = 255;
+    private static final int MAX_FILE_PATH_LENGTH = 1024;
     private static final Set<String> VALID_SEVERITIES =
             Set.of("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO");
     private static final Set<String> VALID_CATEGORIES =
@@ -25,22 +30,33 @@ public class ReviewResponseValidator {
     private static final Set<String> VALID_CONFIDENCE = Set.of("HIGH", "MEDIUM", "LOW");
 
     private final ObjectMapper objectMapper;
+    private final AtomicLong validationFailureCount = new AtomicLong();
+
+    public long getValidationFailureCount() {
+        return validationFailureCount.get();
+    }
 
     public List<ReviewFinding> validateAndParse(String jsonResponse, List<DiffParser.ParsedFile> originalFiles) {
-        JsonNode root = parseRoot(jsonResponse);
-        if (!root.isArray()) {
-            throw new IllegalArgumentException("AI response must be a JSON array");
-        }
-
-        List<ReviewFinding> findings = new ArrayList<>();
-        Set<String> identities = new HashSet<>();
-        for (JsonNode node : root) {
-            ReviewFinding finding = parseFinding(node);
-            if (isValidFinding(finding, originalFiles) && identities.add(identity(finding))) {
-                findings.add(finding);
+        try {
+            JsonNode root = parseRoot(jsonResponse);
+            if (!root.isArray()) {
+                throw new IllegalArgumentException("AI response must be a JSON array");
             }
+
+            List<ReviewFinding> findings = new ArrayList<>();
+            Set<String> identities = new HashSet<>();
+            for (JsonNode node : root) {
+                ReviewFinding finding = parseFinding(node);
+                if (isValidFinding(finding, originalFiles) && identities.add(identity(finding))) {
+                    findings.add(finding);
+                }
+            }
+            return findings;
+        } catch (IllegalArgumentException exception) {
+            validationFailureCount.incrementAndGet();
+            log.warn("ai_response_validation_failed reason={}", exception.getMessage());
+            throw exception;
         }
-        return findings;
     }
 
     private JsonNode parseRoot(String response) {
@@ -64,9 +80,15 @@ public class ReviewResponseValidator {
     }
 
     private ReviewFinding parseFinding(JsonNode node) {
+        if (node == null || !node.isObject()) {
+            throw new IllegalArgumentException("Finding entry must be a JSON object");
+        }
         String title = requiredText(node, "title");
+        if (title.length() > MAX_TITLE_LENGTH) {
+            title = title.substring(0, MAX_TITLE_LENGTH);
+        }
         String description = requiredText(node, "description");
-        String filePath = requiredText(node, "filePath");
+        String filePath = validateFilePath(requiredText(node, "filePath"));
         String evidence = requiredText(node, "evidence");
         String impact = requiredText(node, "impact");
         String suggestedFix = requiredText(node, "suggestedFix");
@@ -91,6 +113,17 @@ public class ReviewResponseValidator {
         finding.setSuggestedFix(suggestedFix);
         finding.setConfidence(confidence);
         return finding;
+    }
+
+    private String validateFilePath(String filePath) {
+        if (filePath.length() > MAX_FILE_PATH_LENGTH
+                || filePath.startsWith("/")
+                || filePath.contains("\\")
+                || filePath.contains("\0")
+                || filePath.contains("..")) {
+            throw new IllegalArgumentException("Invalid filePath in finding");
+        }
+        return filePath;
     }
 
     private String requiredText(JsonNode node, String field) {
@@ -121,7 +154,8 @@ public class ReviewResponseValidator {
     }
 
     private String identity(ReviewFinding finding) {
+        String normalizedTitle = finding.getTitle().trim().replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
         return String.join("|", finding.getFilePath(), String.valueOf(finding.getLineNumber()),
-                finding.getTitle().toLowerCase(Locale.ROOT), finding.getSeverity());
+                normalizedTitle, finding.getSeverity());
     }
 }

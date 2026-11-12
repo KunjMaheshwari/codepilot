@@ -351,3 +351,60 @@ While the repository has a clean architectural skeleton (Spring Boot 3.2.3 API +
 
 - Gemini AI review prompt hardening, response validation, and GitHub PR review comment posting are not yet addressed (Phase 7+).
 - Dockerfiles, `docker-compose.yml`, and CI/CD workflows remain to be added.
+
+---
+
+## 14. Phase 7 Remediation Update (Gemini AI Review Engine Hardening & GitHub PR Review Comments)
+
+### Implemented Functionality
+
+1. **Gemini AI Review Engine Hardening (`GeminiCodeReviewProvider.java`, `ReviewPromptBuilder.java`, `ReviewResponseValidator.java`, `application.yml`)**:
+   - Separated trusted system directives (`systemInstruction`) from untrusted repository diff payloads (`contents` wrapped in `<untrusted_repository_diff>` tags with closing-tag escaping) in Gemini requests.
+   - Enforced strict structured JSON output via `generationConfig.responseMimeType = "application/json"`, `temperature = 0.1`, and an explicit `responseSchema` matching the finding object contract.
+   - Updated default model configuration to `gemini-2.5-flash` (`GEMINI_API_MODEL`).
+   - Implemented bounded retries (`MAX_ATTEMPTS = 3`) with `Retry-After` support and exponential backoff + jitter for transient `429`, `5xx`, and `ResourceAccessException` failures; permanent `4xx` errors (`400`/`401`/`403`/`404`/`422`) fail immediately without retrying.
+   - Handled empty bodies, safety-blocked responses (`promptFeedback.blockReason`), malformed JSON, non-object entries, invalid `filePath` values (`..` traversal, leading `/`, `\`, null bytes), invalid enums, non-added lines, >255-character titles, and whitespace-normalized duplicate findings.
+   - Added structured logs and atomic counters for Gemini successes, failures, retries, latency, validation failures, and findings generated without logging API keys, tokens, or raw diffs.
+
+2. **GitHub PR Review Comment Publishing & Idempotency (`V7__add_github_comment_publications.sql`, `GitHubCommentPublication.java`, `GitHubCommentPublicationRepository.java`, `GitHubApiClient.java`, `GitHubReviewPublisher.java`, `CodeReviewOrchestrator.java`)**:
+   - Added explicit feature flag `codepilot.review.publish-comments-enabled` (`CODEPILOT_REVIEW_PUBLISH_COMMENTS_ENABLED`), **disabled (`false`) by default** for human-in-the-loop safety. CodePilot remains strictly read-only with respect to repository source code (no commits, pushes, merges, or AutoFix).
+   - Added `POST /repos/{owner}/{repo}/pulls/{prNumber}/comments` (inline review comments with `commit_id`, `path`, `line`, `side=RIGHT`) and `POST /repos/{owner}/{repo}/issues/{prNumber}/comments` (PR-level summary fallback) plus `GET` reconciliation helpers in `GitHubApiClient`.
+   - `GitHubApiClient.postComment` does **not** blindly retry `POST` mutations on `ResourceAccessException` timeouts; instead, `GitHubReviewPublisher` records `AMBIGUOUS_TIMEOUT` in `github_comment_publications` and reconciles against existing GitHub comments (via deterministic `<!-- codepilot:idempotency:<sha256> -->` markers) before retrying.
+   - Falls back to a concise PR-level summary comment when inline diff positioning is unavailable or GitHub returns `422 Unprocessable Entity`.
+   - Enforces repository/owner/review tenant boundaries and skips unvalidated findings.
+
+### Files Changed / Added
+- **Main Source & Config**:
+  - `backend/src/main/java/com/codepilot/ai/ReviewPromptBuilder.java`
+  - `backend/src/main/java/com/codepilot/ai/ReviewResponseValidator.java`
+  - `backend/src/main/java/com/codepilot/ai/GeminiCodeReviewProvider.java`
+  - `backend/src/main/java/com/codepilot/service/GitHubApiClient.java`
+  - `backend/src/main/java/com/codepilot/service/GitHubReviewPublisher.java` (new)
+  - `backend/src/main/java/com/codepilot/service/CodeReviewOrchestrator.java`
+  - `backend/src/main/java/com/codepilot/model/GitHubCommentPublication.java` (new)
+  - `backend/src/main/java/com/codepilot/repository/GitHubCommentPublicationRepository.java` (new)
+  - `backend/src/main/resources/application.yml`
+  - `backend/src/main/resources/db/migration/V7__add_github_comment_publications.sql` (new)
+- **Tests**:
+  - `backend/src/test/java/com/codepilot/ai/ReviewPromptBuilderTest.java` (new)
+  - `backend/src/test/java/com/codepilot/ai/GeminiCodeReviewProviderTest.java` (new)
+  - `backend/src/test/java/com/codepilot/ai/ReviewResponseValidatorTest.java`
+  - `backend/src/test/java/com/codepilot/ai/CodeReviewOrchestratorTest.java`
+  - `backend/src/test/java/com/codepilot/service/GitHubApiClientTest.java`
+  - `backend/src/test/java/com/codepilot/service/GitHubReviewPublisherTest.java` (new)
+  - `backend/src/test/java/com/codepilot/integration/GitHubCommentPublicationIntegrationTest.java` (new)
+  - `backend/src/test/java/com/codepilot/infrastructure/PostgresRedisInfrastructureIntegrationTest.java`
+
+### Verification Results
+- **Backend (`cd backend && mvn clean test -B && mvn verify -B`)**: **100 tests run, 0 failures, 0 errors, 0 skipped** (verified against Testcontainers `postgres:17-alpine` + `redis:7-alpine`, Flyway V1–V7, and `MockRestServiceServer` / mocked GitHub & Gemini HTTP responses).
+- **Production JAR Check**: Verified `backend/target/backend-0.0.1-SNAPSHOT.jar` excludes `application-test.yml` and `docker-java.properties`.
+- **Frontend**: No frontend files were modified in Phase 7.
+
+### Security Considerations & Remaining Limitations
+- GitHub comment publishing requires `CODEPILOT_REVIEW_PUBLISH_COMMENTS_ENABLED=true` to activate in production; it remains `false` by default.
+- Live end-to-end calls against external `generativelanguage.googleapis.com` and `api.github.com` are mocked in automated tests and were not executed against live third-party endpoints.
+- Dockerfiles, `docker-compose.yml`, and CI/CD workflows remain for Phase 8+.
+
+### Updated Production-Readiness Assessment
+- **AI Review Engine & GitHub Comment Publishing**: Hardened for structured output, prompt-injection isolation, bounded retries, idempotent comment publication, and timeout reconciliation.
+- **Overall Status**: Core backend build, database migrations (V1–V7), Redis async worker, OAuth/CSRF/tenant security, repo/PR sync, manual review flow, and AI/GitHub publishing are verified; containerization and CI/CD remain for Phase 8.

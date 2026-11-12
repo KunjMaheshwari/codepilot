@@ -151,4 +151,37 @@ class GitHubApiClientTest {
                 .hasMessage("GitHub API rate limit exceeded");
         server.verify();
     }
+
+    @Test
+    void postsInlineAndSummaryCommentsAndDoesNotRetryPostTimeouts() {
+        server.expect(requestTo("https://api.github.test/repos/owner/repo/pulls/5/comments"))
+                .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.method(
+                        org.springframework.http.HttpMethod.POST))
+                .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators
+                        .withSuccess("{\"id\":12345}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://api.github.test/repos/owner/repo/issues/5/comments"))
+                .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.method(
+                        org.springframework.http.HttpMethod.POST))
+                .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators
+                        .withSuccess("{\"id\":67890}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://api.github.test/repos/owner/repo/pulls/5/comments"))
+                .andRespond(request -> {
+                    throw new org.springframework.web.client.ResourceAccessException("Read timed out");
+                });
+
+        Long inlineId = client.createPullRequestReviewComment(
+                "token", "owner", "repo", 5, "Body", "sha1", "src/A.java", 10);
+        assertThat(inlineId).isEqualTo(12345L);
+
+        Long summaryId = client.createIssueComment("token", "owner", "repo", 5, "Summary");
+        assertThat(summaryId).isEqualTo(67890L);
+
+        assertThatThrownBy(() -> client.createPullRequestReviewComment(
+                "token", "owner", "repo", 5, "Body", "sha1", "src/A.java", 10))
+                .isInstanceOf(GitHubApiException.class)
+                .extracting("status")
+                .isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
+
+        server.verify();
+    }
 }

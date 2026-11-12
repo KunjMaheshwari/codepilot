@@ -119,4 +119,45 @@ class ReviewResponseValidatorTest {
         assertThatThrownBy(() -> validator.validateAndParse(json.replace("\"HIGH\"", "\"INVALID\""),
                 List.of(file))).isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void rejectsMalformedJsonAndMissingRequiredFields() {
+        DiffParser.ParsedFile file = new DiffParser.ParsedFile();
+        file.setFilePath("src/Test.java");
+        file.getAddedLines().add(2);
+
+        assertThatThrownBy(() -> validator.validateAndParse("{not-json", List.of(file)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> validator.validateAndParse("{\"title\":\"not-an-array\"}", List.of(file)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> validator.validateAndParse("[{\"title\":\"Missing fields\"}]", List.of(file)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(validator.getValidationFailureCount()).isGreaterThanOrEqualTo(3);
+    }
+
+    @Test
+    void rejectsInvalidCategoryAndTraversalFilePaths() {
+        DiffParser.ParsedFile file = new DiffParser.ParsedFile();
+        file.setFilePath("src/Test.java");
+        file.getAddedLines().add(2);
+
+        String invalidCategory = """
+                [{"title":"T","description":"D","category":"UNKNOWN","severity":"HIGH","filePath":"src/Test.java","lineNumber":2,"evidence":"e","impact":"i","suggestedFix":"f","confidence":"HIGH"}]
+                """;
+        String traversalPath = """
+                [{"title":"T","description":"D","category":"BUG","severity":"HIGH","filePath":"../etc/passwd","lineNumber":2,"evidence":"e","impact":"i","suggestedFix":"f","confidence":"HIGH"}]
+                """;
+        String absolutePath = """
+                [{"title":"T","description":"D","category":"BUG","severity":"HIGH","filePath":"/src/Test.java","lineNumber":2,"evidence":"e","impact":"i","suggestedFix":"f","confidence":"HIGH"}]
+                """;
+
+        assertThatThrownBy(() -> validator.validateAndParse(invalidCategory, List.of(file)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> validator.validateAndParse(traversalPath, List.of(file)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Invalid filePath in finding");
+        assertThatThrownBy(() -> validator.validateAndParse(absolutePath, List.of(file)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Invalid filePath in finding");
+    }
 }

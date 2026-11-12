@@ -27,6 +27,7 @@ public class CodeReviewOrchestrator {
     private final ReviewFindingRepository findingRepository;
     private final ReviewJobService reviewJobService;
     private final DiffParser diffParser;
+    private final GitHubReviewPublisher gitHubReviewPublisher;
 
     public void executeReview(Review review, PullRequest pr, Repository repo, User user) {
         ReviewJob job = reviewJobService.createJob(review);
@@ -64,7 +65,8 @@ public class CodeReviewOrchestrator {
 
             if (findings != null && !findings.isEmpty()) {
                 findings.forEach(f -> f.setReview(review));
-                findingRepository.saveAll(findings);
+                List<ReviewFinding> savedFindings = findingRepository.saveAll(findings);
+                gitHubReviewPublisher.publishReviewFindings(review, pr, savedFindings, reviewableFiles);
             }
 
             review.setStatus(reviewableFiles.size() == parsedFiles.size() ? "COMPLETED" : "PARTIAL");

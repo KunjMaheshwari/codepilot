@@ -95,6 +95,85 @@ public class GitHubApiClient {
         });
     }
 
+    public Long createPullRequestReviewComment(
+            String accessToken,
+            String owner,
+            String repo,
+            int prNumber,
+            String body,
+            String commitId,
+            String path,
+            int line) {
+        String url = String.format("%s/repos/%s/%s/pulls/%d/comments", githubApiUrl, owner, repo, prNumber);
+        Map<String, Object> payload = Map.of(
+                "body", body,
+                "commit_id", commitId,
+                "path", path,
+                "line", line,
+                "side", "RIGHT");
+        return postComment(url, accessToken, payload);
+    }
+
+    public Long createIssueComment(
+            String accessToken,
+            String owner,
+            String repo,
+            int prNumber,
+            String body) {
+        String url = String.format("%s/repos/%s/%s/issues/%d/comments", githubApiUrl, owner, repo, prNumber);
+        return postComment(url, accessToken, Map.of("body", body));
+    }
+
+    public List<Map<String, Object>> listPullRequestReviewComments(
+            String accessToken, String owner, String repo, int prNumber, int page, int perPage) {
+        String url = String.format("%s/repos/%s/%s/pulls/%d/comments?page=%d&per_page=%d",
+                githubApiUrl, owner, repo, prNumber, page, perPage);
+        return executeWithRetry(() -> exchangeList(url, accessToken));
+    }
+
+    public List<Map<String, Object>> listIssueComments(
+            String accessToken, String owner, String repo, int prNumber, int page, int perPage) {
+        String url = String.format("%s/repos/%s/%s/issues/%d/comments?page=%d&per_page=%d",
+                githubApiUrl, owner, repo, prNumber, page, perPage);
+        return executeWithRetry(() -> exchangeList(url, accessToken));
+    }
+
+    private Long postComment(String url, String accessToken, Map<String, Object> payload) {
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            try {
+                HttpHeaders headers = createHeaders(accessToken);
+                headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
+                ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
+                        URI.create(url), HttpMethod.POST, new HttpEntity<>(payload, headers),
+                        new ParameterizedTypeReference<Map<String, Object>>() {});
+                Map<String, Object> responseBody = response.getBody();
+                if (responseBody != null && responseBody.get("id") instanceof Number number) {
+                    return number.longValue();
+                }
+                return null;
+            } catch (HttpStatusCodeException exception) {
+                HttpStatus status = HttpStatus.resolve(exception.getStatusCode().value());
+                if (status == null) {
+                    throw new GitHubApiException("GitHub returned an unsupported HTTP error",
+                            HttpStatus.BAD_GATEWAY);
+                }
+                Instant retryAt = retryAt(exception);
+                boolean rateLimited = status == HttpStatus.TOO_MANY_REQUESTS
+                        || (status == HttpStatus.FORBIDDEN && retryAt != null);
+                if (!rateLimited || attempt == MAX_ATTEMPTS) {
+                    throw classify(exception, status, retryAt);
+                }
+                waitBeforeRetry(attempt, retryAt);
+            } catch (ResourceAccessException exception) {
+                // Do not retry POST on timeout/network ambiguity; caller reconciles whether GitHub persisted it.
+                log.warn("GitHub comment POST timed out or failed due to network error: {}",
+                        exception.getClass().getSimpleName());
+                throw new GitHubApiException("GitHub API comment request timed out", HttpStatus.GATEWAY_TIMEOUT);
+            }
+        }
+        throw new GitHubApiException("GitHub API comment request failed", HttpStatus.BAD_GATEWAY);
+    }
+
     private List<Map<String, Object>> exchangeList(String url, String accessToken) {
         ResponseEntity<List<Map<String, Object>>> response = restTemplate.exchange(
                 URI.create(url), HttpMethod.GET, new HttpEntity<>(createHeaders(accessToken)),

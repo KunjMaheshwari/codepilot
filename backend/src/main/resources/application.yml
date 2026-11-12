@@ -67,6 +67,7 @@ codepilot:
   encryption:
     key: ${ENCRYPTION_KEY}
   review:
+    publish-comments-enabled: ${CODEPILOT_REVIEW_PUBLISH_COMMENTS_ENABLED:false}
     max-file-bytes: ${CODEPILOT_REVIEW_MAX_FILE_BYTES:102400}
     max-diff-bytes: ${CODEPILOT_REVIEW_MAX_DIFF_BYTES:2097152}
     async:
@@ -90,7 +91,7 @@ gemini:
   api:
     key: ${GEMINI_API_KEY}
     url: ${GEMINI_API_URL:https://generativelanguage.googleapis.com}
-    model: ${GEMINI_API_MODEL:gemini-1.5-pro}
+    model: ${GEMINI_API_MODEL:gemini-2.5-flash}
 
 github:
   webhook:
