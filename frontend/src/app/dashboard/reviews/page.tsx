@@ -2,19 +2,24 @@
 
 import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { api, apiErrorMessage, formatDate, type Review, type ReviewFinding, type ReviewJob } from "@/lib/api";
 
 const activeStatuses = ["PENDING", "QUEUED", "PROCESSING", "RETRYING"];
+const terminalWithFindings = ["COMPLETED", "PARTIAL"];
 
 export default function ReviewsPage() {
   const [reviews, setReviews] = useState<Review[]>([]);
   const [jobs, setJobs] = useState<Record<string, ReviewJob>>({});
   const [findings, setFindings] = useState<Record<string, ReviewFinding[]>>({});
+  const [loadingFindingsId, setLoadingFindingsId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   const load = () => api.getReviews(0, 100)
     .then((page) => setReviews(page.content))
-    .catch((reason: unknown) => setError(apiErrorMessage(reason)));
+    .catch((reason: unknown) => setError(apiErrorMessage(reason)))
+    .finally(() => setLoading(false));
 
   useEffect(() => { void load(); }, []);
 
@@ -33,15 +38,26 @@ export default function ReviewsPage() {
     return () => window.clearInterval(poll);
   }, [reviews]);
 
+  const loadFindings = (reviewId: string) => {
+    if (loadingFindingsId === reviewId) return;
+    setLoadingFindingsId(reviewId);
+    api.getFindings(reviewId)
+      .then((page) => setFindings((current) => ({ ...current, [reviewId]: page.content })))
+      .catch((reason: unknown) => setError(apiErrorMessage(reason)))
+      .finally(() => setLoadingFindingsId(null));
+  };
+
   return (
     <div className="flex flex-col gap-4 pt-6">
       <h1 className="text-3xl font-bold tracking-tight">Reviews</h1>
       {error && <p className="rounded-md border border-destructive/40 p-3 text-sm text-destructive">{error}</p>}
-      {reviews.length === 0 && !error && <p className="rounded-md border border-dashed p-8 text-center text-sm text-muted-foreground">No reviews found.</p>}
+      {loading && <p className="text-sm text-muted-foreground">Loading reviews...</p>}
+      {!loading && reviews.length === 0 && !error && <p className="rounded-md border border-dashed p-8 text-center text-sm text-muted-foreground">No reviews found.</p>}
       <div className="space-y-4">
         {reviews.map((review) => {
           const job = jobs[review.id];
           const status = job?.status ?? review.status;
+          const canLoadFindings = terminalWithFindings.includes(status) && !findings[review.id];
           return (
             <article key={review.id} className="rounded-lg border bg-background p-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -49,7 +65,19 @@ export default function ReviewsPage() {
                   <h2 className="font-semibold">Review {review.id.slice(0, 8)}</h2>
                   <p className="text-sm text-muted-foreground">Created {formatDate(review.createdAt)}</p>
                 </div>
-                <Badge variant={status === "FAILED" ? "destructive" : "secondary"}>{status}</Badge>
+                <div className="flex items-center gap-2">
+                  {canLoadFindings && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={loadingFindingsId === review.id}
+                      onClick={() => loadFindings(review.id)}
+                    >
+                      {loadingFindingsId === review.id ? "Loading..." : "Load Findings"}
+                    </Button>
+                  )}
+                  <Badge variant={status === "FAILED" ? "destructive" : "secondary"}>{status}</Badge>
+                </div>
               </div>
               {job && <p className="mt-2 text-sm text-muted-foreground">Attempt {job.attemptCount} · {job.errorMessage || "No error"}</p>}
               {findings[review.id] && (

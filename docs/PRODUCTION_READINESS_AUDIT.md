@@ -315,3 +315,39 @@ While the repository has a clean architectural skeleton (Spring Boot 3.2.3 API +
 | Frontend UX & Integration | 3/10 | Clean UI shell, but mutations fail 403, PRs don't sync, completed findings aren't fetched. |
 | Tests & CI/CD | 3/10 | 55 H2/mocked backend tests; 0 frontend tests; 0 E2E tests; no Docker or CI/CD. |
 
+
+---
+
+## 13. Phase 6 Remediation Update (GitHub Repository Sync, PR Sync & Manual Review Workflow)
+
+### Completed Changes
+
+1. **GitHub API Reliability (`GitHubApiClient.java`)**:
+   - Added explicit `409 Conflict` and `422 Unprocessable Entity` classification in `classify(...)`.
+   - Classified `403` responses accompanied by rate-limit retry headers (`Retry-After` / `X-RateLimit-Reset`) as `"GitHub API rate limit exceeded"` while preserving bounded retries (`MAX_ATTEMPTS = 3`, `MAX_RETRY_WAIT_SECONDS = 5`).
+   - Preserved token redaction and omitted diff payloads from logs.
+
+2. **Repository & Pull Request Synchronization (`GitHubIntegrationService.java`, `RepositoryRepository.java`, `RepositoryController.java`)**:
+   - Added `synchronizeAllRepositories(User)` with bounded pagination (up to 10 pages × 100 repositories) keyed by immutable `githubRepoId`, tracking `archived`/`disabled` state into `isActive`, and deactivating missing repositories only after full pagination completes.
+   - Added `synchronizeAllPullRequests(User, Repository)` with bounded pagination across `state=all`, mapping merged pull requests (`merged_at != null` or `merged == true`) to `"merged"`.
+   - Exposed `POST /api/v1/repositories/{id}/pull-requests/sync` (enforcing repository ownership via `repositoryService.getOwnedRepository(id)`).
+   - Validated `owner/repo` `fullName` safely in `splitFullName(...)` across PR list, details, and diff calls.
+
+3. **Manual Review Workflow (`ReviewService.java`, `ReviewDto.java`)**:
+   - Rejected manual review requests on inactive/archived repositories or non-open (`closed`/`merged`) pull requests with `IllegalArgumentException` (`400 Bad Request`).
+   - Preserved active-review and `headSha` deduplication and populated `jobId` in `ReviewDto` for consistent review/job tracking.
+
+4. **Frontend Integration (`frontend/src/lib/api.ts`, `frontend/src/app/dashboard/repositories/page.tsx`, `frontend/src/app/dashboard/reviews/page.tsx`)**:
+   - Added `api.syncPullRequests(repositoryId)` and `Review.jobId`.
+   - Added loading/submitting states to prevent duplicate repository sync, PR sync, and review submissions; disabled `"Review"` on non-open PRs or inactive repositories; added status banner with link to `/dashboard/reviews`.
+   - Added `"Load Findings"` action on completed/partial reviews in `ReviewsPage`.
+
+### Verification Evidence
+
+- **Backend (`cd backend && mvn clean test -B && mvn verify -B`)**: **83 tests run, 0 failures, 0 errors, 0 skipped** (including `GitHubApiClientTest`, `GitHubIntegrationServiceTest`, and `ManualReviewWorkflowIntegrationTest` against Testcontainers `postgres:17-alpine` + `redis:7-alpine`).
+- **Frontend (`cd frontend && npm run lint && npx tsc --noEmit && npm run build`)**: Passed with 0 errors.
+
+### Remaining Limitations (Deferred to Subsequent Phases)
+
+- Gemini AI review prompt hardening, response validation, and GitHub PR review comment posting are not yet addressed (Phase 7+).
+- Dockerfiles, `docker-compose.yml`, and CI/CD workflows remain to be added.

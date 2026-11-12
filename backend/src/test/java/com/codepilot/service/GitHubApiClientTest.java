@@ -114,4 +114,41 @@ class GitHubApiClientTest {
                 .hasMessage("GitHub returned an empty pull request diff");
         server.verify();
     }
+
+    @Test
+    void translates409ConflictWithoutRetrying() {
+        server.expect(requestTo("https://api.github.test/repos/owner/repo/pulls/1"))
+                .andRespond(withStatus(HttpStatus.CONFLICT));
+
+        assertThatThrownBy(() -> client.getPullRequest("token", "owner", "repo", 1))
+                .isInstanceOf(GitHubApiException.class)
+                .hasMessage("GitHub resource state conflict occurred");
+        server.verify();
+    }
+
+    @Test
+    void translates422UnprocessableEntityWithoutRetrying() {
+        server.expect(requestTo("https://api.github.test/repos/owner/repo/pulls/1"))
+                .andRespond(withStatus(HttpStatus.UNPROCESSABLE_ENTITY));
+
+        assertThatThrownBy(() -> client.getPullRequest("token", "owner", "repo", 1))
+                .isInstanceOf(GitHubApiException.class)
+                .hasMessage("GitHub rejected the request parameters");
+        server.verify();
+    }
+
+    @Test
+    void retries403RateLimitWhenRetryAfterIsPresent() {
+        server.expect(requestTo("https://api.github.test/user/repos?page=1&per_page=10"))
+                .andRespond(withStatus(HttpStatus.FORBIDDEN).header("Retry-After", "0"));
+        server.expect(requestTo("https://api.github.test/user/repos?page=1&per_page=10"))
+                .andRespond(withStatus(HttpStatus.FORBIDDEN).header("Retry-After", "0"));
+        server.expect(requestTo("https://api.github.test/user/repos?page=1&per_page=10"))
+                .andRespond(withStatus(HttpStatus.FORBIDDEN).header("Retry-After", "0"));
+
+        assertThatThrownBy(() -> client.getUserRepositories("token", 1, 10))
+                .isInstanceOf(GitHubApiException.class)
+                .hasMessage("GitHub API rate limit exceeded");
+        server.verify();
+    }
 }

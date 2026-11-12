@@ -55,6 +55,7 @@ export interface PullRequest {
 export interface Review {
   id: string;
   pullRequestId: string;
+  jobId?: string;
   status: string;
   startedAt?: string;
   completedAt?: string;
@@ -183,6 +184,11 @@ export const api = {
   getPullRequests: (repositoryId: string, page = 0, size = 20) =>
     request<Page<PullRequest>>(
       `/api/v1/repositories/${repositoryId}/pull-requests?page=${page}&size=${size}`,
+    ),
+  syncPullRequests: (repositoryId: string, page = 0, size = 20) =>
+    request<Page<PullRequest>>(
+      `/api/v1/repositories/${repositoryId}/pull-requests/sync?page=${page}&size=${size}`,
+      { method: "POST" },
     ),
   getReviews: (page = 0, size = 20) =>
     request<Page<Review>>(`/api/v1/reviews?page=${page}&size=${size}`),

@@ -141,8 +141,12 @@ public class GitHubApiClient {
     private GitHubApiException classify(HttpStatusCodeException exception, HttpStatus status, Instant retryAt) {
         String message = switch (status) {
             case UNAUTHORIZED -> "GitHub authentication failed";
-            case FORBIDDEN -> "GitHub denied access to this resource";
+            case FORBIDDEN -> retryAt != null
+                    ? "GitHub API rate limit exceeded"
+                    : "GitHub denied access to this resource";
             case NOT_FOUND -> "GitHub resource was not found or is inaccessible";
+            case CONFLICT -> "GitHub resource state conflict occurred";
+            case UNPROCESSABLE_ENTITY -> "GitHub rejected the request parameters";
             case TOO_MANY_REQUESTS -> "GitHub API rate limit exceeded";
             default -> status.is5xxServerError() ? "GitHub API is unavailable" : "GitHub API request failed";
         };
