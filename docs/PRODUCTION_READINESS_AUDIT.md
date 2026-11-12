@@ -512,3 +512,93 @@ While the repository has a clean architectural skeleton (Spring Boot 3.2.3 API +
 - `NEXT_PUBLIC_API_BASE_URL` is inlined at Next.js image build time; staging and production deployments must build separate frontend images (or pass the environment-specific `NEXT_PUBLIC_API_BASE_URL` build arg in `deploy.yml`).
 - Trivy vulnerability scanning in `ci.yml` runs in advisory mode (`exit-code: "0"`, `ignore-unfixed: true`) and has not been executed locally inside GitHub Actions yet.
 - `.github/workflows/deploy.yml` contains a configurable deployment hook placeholder and requires selecting a concrete target runtime (e.g., ECS, Cloud Run, Kubernetes, or VM Compose) and populating GitHub Environment secrets before production rollout.
+
+---
+
+## Final Production Readiness Assessment — Phase 11
+
+### 1. Overall Readiness Score
+**88 / 100** — **Ready for single-instance staging/pilot deployment** after provisioning external secrets and TLS termination. Multi-instance horizontal scaling and live external OAuth/Gemini/GitHub soak validation remain pre-launch operational gates (see Remaining Issues below).
+
+### 2. Security Assessment
+- **Authentication, Sessions & Reverse-Proxy OAuth (`SecurityConfig.java`, `AuthController.java`, `application.yml`)**:
+  - **Fix applied in Phase 11**: Added `server.forward-headers-strategy: ${FORWARD_HEADERS_STRATEGY:framework}` to `application.yml` (and `application-test.yml`) so `X-Forwarded-Proto` / `X-Forwarded-Host` from a TLS-terminating reverse proxy produce `https://` OAuth2 `redirect_uri` values instead of `http://`. Verified both in `SecurityHardeningIntegrationTest.oauthAuthorizationHonorsForwardedHttpsHeadersBehindReverseProxy` and against the live containerized backend (`Location: ...&redirect_uri=https://api.codepilot.example/login/oauth2/code/github`).
+  - Session fixation (`migrateSession()`), `HttpOnly` session cookies, `SameSite` + `COOKIE_SECURE`, CSRF (`CookieCsrfTokenRepository.withHttpOnlyFalse()` + `X-XSRF-TOKEN`), explicit CORS allowlist (no `*` wildcards), `frameOptions.deny()`, `Referrer-Policy`, and full session invalidation on `DELETE /api/v1/auth/github` and `POST /api/v1/auth/logout` are implemented and verified in `SecurityHardeningIntegrationTest`.
+- **Multi-Tenant Isolation**:
+  - Verified across `RepositoryService`, `PullRequestService`, `ReviewService`, and `DashboardService`: all queries scope by `user.getId()` (`findByIdAndOwnerId`, `findByIdAndRepositoryOwnerId`, `findByIdAndPullRequestRepositoryOwnerId`). Verified in `FullReviewJourneyIntegrationTest` and `SecurityHardeningIntegrationTest`.
+- **Secrets & Encryption**:
+  - `EncryptionService` uses `AES/GCM/NoPadding` with a 12-byte random nonce, 128-bit tag, and externally configured 256-bit hex `ENCRYPTION_KEY` (validated at startup). `StartupConfigurationValidator` and `GitHubWebhookSignatureVerifier` fail fast outside `test` profile when required secrets are missing.
+- **Webhook & API Security**:
+  - `GitHubWebhookSignatureVerifier` uses `HmacSHA256` with `MessageDigest.isEqual` constant-time comparison; `GitHubWebhookController` enforces `max-payload-bytes` (1 MB) and returns `401` on invalid signatures; `GlobalExceptionHandler` maps unexpected errors to generic `500` messages without stack traces.
+  - `/actuator/health`, `/actuator/health/liveness`, `/actuator/health/readiness` are permitted with `show-details: never`; Swagger/OpenAPI is disabled publicly by default (`CODEPILOT_SWAGGER_PUBLIC=false`).
+  - **Known Limitation (P2)**: `RateLimitFilter` uses an in-memory `ConcurrentHashMap` (single-instance only) and reads `X-Forwarded-For` directly.
+
+### 3. Backend Reliability Assessment
+- `ReviewJobWorker` claims jobs atomically in PostgreSQL (`reviewJobService.claim`), uses Redis `rightPopAndLeftPush` + ZSET delayed retries (`computeRetryDelayMillis`, bounded by `maxAttempts=3`) + DLQ (`codepilot:review-jobs:dead-letter`), and avoids `Thread.sleep()`.
+- `ReviewService.createReview` deduplicates active (`QUEUED`, `PROCESSING`, `PARTIAL`) and completed reviews for the same `headSha`, and registers `TransactionSynchronization.afterCommit` before publishing to Redis.
+- Graceful shutdown (`server.shutdown: graceful`, 30s timeout) and `StartupLifecycleLogger` verified in tests and containers.
+
+### 4. AI Review Quality & Safety Assessment
+- `GeminiCodeReviewProvider` enforces structured JSON output via `responseSchema`, separates trusted instructions from `<untrusted_repository_diff>` delimiters, and bounds retries (`MAX_ATTEMPTS=3`, skipping retry on permanent `401`).
+- `ReviewResponseValidator` and `DiffParser` validate file paths, line numbers, severities, and diff size limits (`max-file-bytes`, `max-diff-bytes`) before persistence.
+- `GitHubReviewPublisher` enforces idempotency via `<!-- codepilot:idempotency:... -->` markers + `github_comment_publications` table (`V7`), falls back safely on invalid diff positions, and is gated behind `codepilot.review.publish-comments-enabled=false` by default.
+
+### 5. Frontend Assessment
+- Next.js 16.4.5 (`output: "standalone"`) with `Inter` / `JetBrains Mono`, `XSRF-TOKEN` auto-bootstrap in `frontend/src/lib/api.ts`, 15s request abort timeout, `EmptyState` / `ErrorBanner`, and `/api/health` readiness endpoint.
+- Production build, ESLint, TypeScript check, and 13 Playwright E2E tests pass.
+
+### 6. Database Assessment
+- Flyway migrations `V1`–`V7` execute cleanly against PostgreSQL 17 (`7 rows` in `flyway_schema_history`, all `success = t`); Hibernate validates schema (`ddl-auto: validate`) with HikariCP (`max=10`, `min-idle=2`).
+- Tenant ownership foreign keys and indexes are in place; no destructive DDL settings exist.
+
+### 7. Infrastructure & Container Security Assessment
+- Multi-stage Dockerfiles (`backend/Dockerfile`, `frontend/Dockerfile`) run as non-root users (`codepilot`, `nextjs`), exclude test/dev artifacts, and configure `HEALTHCHECK` probes.
+- `docker-compose.yml` isolates `postgres:17-alpine` and `redis:7-alpine` on `codepilot-network` without exposing DB/Redis host ports, sets `no-new-privileges:true`, and uses named persistent volumes (`postgres_data`, `redis_data`).
+- **Limitation**: `trivy` is not installed in the local environment, so local container vulnerability scanning was not executed (configured as advisory Trivy jobs in `.github/workflows/ci.yml`).
+
+### 8. CI/CD Assessment
+- `.github/workflows/ci.yml` runs backend (`mvn clean test -B`, `mvn verify -B`), frontend (`npm ci`, `npm run lint`, `npx tsc --noEmit`, `npm run build`, Playwright Chromium E2E), and Docker/Compose validation + advisory Trivy scans under `contents: read` least privilege.
+- `.github/workflows/deploy.yml` gates releases behind `release: [published]` / `workflow_dispatch` and GitHub Environments (`staging`/`production`).
+
+### 9. Testing Assessment & Evidence Matrix
+- **Verified in automated tests**:
+  - Backend: `mvn clean test -B && mvn verify -B` -> **103 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`) using Testcontainers (`postgres:17-alpine`, `redis:7-alpine`).
+  - Frontend: `npm run lint` (0 errors), `npx tsc --noEmit` (0 errors), `npm run build` (standalone build succeeded), `npx playwright test` (**13 passed in 8.7s**).
+- **Verified locally (containerized)**:
+  - `docker compose --env-file .env.example config -q` valid; `backend` and `frontend` images built cleanly.
+  - Isolated `codepilot-verify` Compose stack (`18080`/`13000`): all 4 containers `healthy`, Flyway `V1`–`V7` applied, `/actuator/health/readiness` (`UP`), `/api/health` (`ok`), CORS + `XSRF-TOKEN`, `X-Forwarded-Proto: https` OAuth `redirect_uri` rewrite, non-root users (`codepilot`, `nextjs`), and PostgreSQL/Redis volume persistence across `down` -> `up` restart.
+- **Verified using mocked external services**:
+  - GitHub OAuth2 login/API calls (`@MockBean GitHubApiClient`, `oauth2Login()`), Gemini API (`MockRestServiceServer`), and Playwright API route interception (`page.route`).
+- **Verified against live external services**:
+  - None (no live GitHub OAuth app, live GitHub webhook delivery, or live Gemini API key calls were executed in this audit).
+- **Not yet verified**:
+  - GitHub Actions workflow execution on GitHub runners (including Trivy container scans), multi-instance horizontal scaling under load, and live TLS reverse-proxy + GitHub OAuth callback end-to-end.
+
+### 10. Performance & Disaster Recovery Assessment
+- HikariCP (`max=10`), JVM `-XX:MaxRAMPercentage=75.0`, diff size caps (`100 KB` file / `2 MB` total), and paginated repositories/PRs/reviews bound per-request resource usage.
+- **Disaster Recovery & Operations**:
+  - **PostgreSQL Backup/Restore**: Schedule automated `pg_dump` / managed snapshots on `postgres_data`; test point-in-time or dump restore into a staging DB before running new Flyway migrations (migrations are forward-only; rollback requires restoring a pre-migration snapshot or authoring a compensating forward migration).
+  - **Redis Persistence & Crash Recovery**: AOF (`--appendonly yes`) preserves queued jobs across restarts; PostgreSQL remains the source of truth, and stale `PROCESSING` / `QUEUED` jobs are recovered by `ReviewJobRecoveryScheduler`.
+  - **Logging, Metrics & Alerting**: Collect container stdout JSON/structured logs centrally; scrape `/actuator/metrics` (authenticated) and alert on readiness probe failures, Hikari pool exhaustion, DLQ growth (`codepilot:review-jobs:dead-letter`), and elevated `5xx` rates.
+  - **Secret Rotation**: Rotate `GITHUB_CLIENT_SECRET`, `GITHUB_WEBHOOK_SECRET`, and `GEMINI_API_KEY` via environment secret updates + rolling restart. Rotating `ENCRYPTION_KEY` requires a key-versioned re-encryption migration for stored `connected_github_accounts.access_token`.
+
+### 11. Remaining P0 / P1 / P2 / P3 Issues
+- **P0 (Critical)**: None remaining.
+- **P1 (High)**:
+  - Live external integration verification (GitHub OAuth App callback, live GitHub webhook delivery, and live Gemini API key) must be validated in staging before opening to external users.
+- **P2 (Medium)**:
+  - `RateLimitFilter` uses an in-memory `ConcurrentHashMap` and reads `X-Forwarded-For` directly; replace with Redis-backed distributed rate limiting and trusted-proxy IP resolution before scaling backend replicas > 1.
+  - Unauthenticated `/api/v1/**` requests currently return `302` redirect to `/oauth2/authorization/github` rather than `401 Unauthorized` (handled in `frontend/src/lib/api.ts`, but returning `401` via `AuthenticationEntryPoint` for `/api/**` is cleaner).
+  - `application.yml` leaves `spring.jpa.open-in-view` at Spring Boot's default (`true`), emitting a startup warning; disabling it (`open-in-view: false`) after verifying lazy-loading boundaries will eliminate the warning.
+- **P3 (Low)**:
+  - Pin third-party GitHub Actions in `ci.yml` / `deploy.yml` to immutable commit SHAs instead of major version tags (`@v4`, `@v6`, `@0.28.0`) for stricter supply-chain hardening.
+  - Add a concrete deployment target implementation to `.github/workflows/deploy.yml` and pass environment-specific `NEXT_PUBLIC_API_BASE_URL` per staging/production image build.
+
+### 12. Deployment Prerequisites & Launch Checklist
+1. Provision managed PostgreSQL 17 and Redis 7 (or persistent container volumes with automated backups) and set strong credentials.
+2. Generate a unique 256-bit `ENCRYPTION_KEY` (`openssl rand -hex 32`) and configure `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_WEBHOOK_SECRET`, and `GEMINI_API_KEY` in the target secret store.
+3. Configure TLS termination at the reverse proxy/load balancer forwarding `X-Forwarded-Proto: https` and `X-Forwarded-Host`.
+4. Set `COOKIE_SECURE=true`, `FRONTEND_URL=https://<frontend-domain>`, `CORS_ALLOWED_ORIGINS=https://<frontend-domain>`, `CODEPILOT_SWAGGER_PUBLIC=false`, and `ACTUATOR_HEALTH_SHOW_DETAILS=never`.
+5. Build the frontend image with `NEXT_PUBLIC_API_BASE_URL=https://<backend-domain>`.
+6. Register the GitHub OAuth callback URL (`https://<backend-domain>/login/oauth2/code/github`) and webhook URL (`https://<backend-domain>/api/v1/webhooks/github`).
+7. Keep `CODEPILOT_REVIEW_PUBLISH_COMMENTS_ENABLED=false` during initial smoke testing; enable only after verifying review quality in staging.

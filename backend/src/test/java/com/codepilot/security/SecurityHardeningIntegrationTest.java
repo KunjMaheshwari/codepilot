@@ -197,5 +197,29 @@ class SecurityHardeningIntegrationTest {
         mockMvc.perform(get("/v3/api-docs"))
                 .andExpect(status().is3xxRedirection());
     }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.context.ApplicationContext applicationContext;
+
+    @Test
+    void oauthAuthorizationHonorsForwardedHttpsHeadersBehindReverseProxy() throws Exception {
+        assertThat(applicationContext.getEnvironment().getProperty("server.forward-headers-strategy"))
+                .isEqualTo("framework");
+
+        org.springframework.web.filter.ForwardedHeaderFilter filter =
+                new org.springframework.web.filter.ForwardedHeaderFilter();
+        org.springframework.mock.web.MockHttpServletRequest request =
+                new org.springframework.mock.web.MockHttpServletRequest("GET", "/oauth2/authorization/github");
+        request.addHeader("X-Forwarded-Proto", "https");
+        request.addHeader("X-Forwarded-Host", "api.codepilot.example");
+        org.springframework.mock.web.MockHttpServletResponse response =
+                new org.springframework.mock.web.MockHttpServletResponse();
+
+        filter.doFilter(request, response, (req, res) -> {
+            assertThat(req.getScheme()).isEqualTo("https");
+            assertThat(req.getServerName()).isEqualTo("api.codepilot.example");
+            assertThat(req.getServerPort()).isEqualTo(443);
+        });
+    }
 }
 

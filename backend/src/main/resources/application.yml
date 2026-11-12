@@ -98,6 +98,7 @@ github:
     secret: ${GITHUB_WEBHOOK_SECRET:}
 
 server:
+  forward-headers-strategy: ${FORWARD_HEADERS_STRATEGY:framework}
   shutdown: graceful
   servlet:
     session:
