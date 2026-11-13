@@ -119,14 +119,23 @@ function readCookie(name: string): string | undefined {
   return match ? decodeURIComponent(match.slice(prefix.length)) : undefined;
 }
 
+let cachedCsrfToken: string | undefined;
+
 async function ensureCsrfToken(): Promise<string | undefined> {
   const existing = readCookie("XSRF-TOKEN");
-  if (existing) return existing;
-  await fetch(`${API_BASE_URL}/api/v1/auth/csrf`, {
+  if (existing) {
+    cachedCsrfToken = existing;
+    return existing;
+  }
+  if (cachedCsrfToken) return cachedCsrfToken;
+  const response = await fetch(`${API_BASE_URL}/api/v1/auth/csrf`, {
     method: "GET",
     credentials: "include",
   });
-  return readCookie("XSRF-TOKEN");
+  const fromCookie = readCookie("XSRF-TOKEN");
+  const fromHeader = response.headers.get("X-XSRF-TOKEN") ?? undefined;
+  cachedCsrfToken = fromCookie ?? fromHeader;
+  return cachedCsrfToken;
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -159,6 +168,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
         // Keep the status-based message for non-JSON responses.
       }
       if (response.status === 401 || response.status === 403) {
+        cachedCsrfToken = undefined;
         message = "Your session has expired. Please sign in again.";
       }
       throw new ApiError(message, response.status);
@@ -227,9 +237,20 @@ export const api = {
       `/api/v1/reviews/${reviewId}/findings?page=${page}&size=${size}`,
     ),
   getMe: () => request<UserProfile>("/api/v1/auth/me"),
-  logout: () => request<void>("/api/v1/auth/logout", { method: "POST" }),
-  disconnectGitHub: () =>
-    request<void>("/api/v1/auth/github", { method: "DELETE" }),
+  logout: async () => {
+    try {
+      await request<void>("/api/v1/auth/logout", { method: "POST" });
+    } finally {
+      cachedCsrfToken = undefined;
+    }
+  },
+  disconnectGitHub: async () => {
+    try {
+      await request<void>("/api/v1/auth/github", { method: "DELETE" });
+    } finally {
+      cachedCsrfToken = undefined;
+    }
+  },
 };
 
 export const githubLoginUrl = `${API_BASE_URL}/oauth2/authorization/github`;

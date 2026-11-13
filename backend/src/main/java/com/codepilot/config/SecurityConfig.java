@@ -23,10 +23,13 @@ import org.springframework.security.oauth2.client.userinfo.OAuth2UserService;
 import org.springframework.security.oauth2.core.user.DefaultOAuth2User;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.LoginUrlAuthenticationEntryPoint;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
+import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
+import org.springframework.security.web.util.matcher.AnyRequestMatcher;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -97,11 +100,22 @@ public class SecurityConfig {
                 }
                 auth.anyRequest().authenticated();
             })
+            .exceptionHandling(exceptions -> exceptions
+                .defaultAuthenticationEntryPointFor((request, response, authException) -> {
+                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                    response.setContentType("application/json");
+                    response.getWriter().write(
+                            "{\"status\":401,\"error\":\"Unauthorized\",\"message\":\"Authentication required\"}");
+                }, new AntPathRequestMatcher("/api/**"))
+                .defaultAuthenticationEntryPointFor(
+                        new LoginUrlAuthenticationEntryPoint("/oauth2/authorization/github"),
+                        AnyRequestMatcher.INSTANCE)
+            )
             .oauth2Login(oauth2 -> oauth2
                 .userInfoEndpoint(userInfo -> userInfo
                     .userService(this.oauth2UserService())
                 )
-                .defaultSuccessUrl(frontendUrl + "/dashboard", true)
+                .defaultSuccessUrl(normalizeOrigin(frontendUrl) + "/dashboard", true)
             )
             .logout(logout -> logout
                 .logoutUrl("/api/v1/auth/logout")
@@ -117,7 +131,7 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         List<String> trustedOrigins = allowedOrigins.stream()
-                .map(String::trim)
+                .map(SecurityConfig::normalizeOrigin)
                 .filter(origin -> !origin.isBlank() && !"*".equals(origin))
                 .toList();
 
@@ -125,12 +139,21 @@ public class SecurityConfig {
         configuration.setAllowedOrigins(trustedOrigins);
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("Content-Type", "X-XSRF-TOKEN", "Authorization", "Accept"));
+        configuration.setExposedHeaders(List.of("X-XSRF-TOKEN"));
         configuration.setAllowCredentials(true);
         configuration.setMaxAge(3600L);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
         return source;
+    }
+
+    private static String normalizeOrigin(String origin) {
+        if (origin == null) {
+            return "";
+        }
+        String trimmed = origin.trim();
+        return trimmed.endsWith("/") ? trimmed.substring(0, trimmed.length() - 1) : trimmed;
     }
 
     private OAuth2UserService<OAuth2UserRequest, OAuth2User> oauth2UserService() {

@@ -34,7 +34,9 @@ public class AuthController {
     @GetMapping("/csrf")
     public ResponseEntity<Void> csrf(CsrfToken token) {
         if (token != null) {
-            token.getToken();
+            return ResponseEntity.noContent()
+                    .header("X-XSRF-TOKEN", token.getToken())
+                    .build();
         }
         return ResponseEntity.noContent().build();
     }

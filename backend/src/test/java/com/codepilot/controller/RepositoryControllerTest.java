@@ -91,6 +91,6 @@ class RepositoryControllerTest {
     @Test
     void getRepository_ShouldRequireAuthentication() throws Exception {
         mockMvc.perform(get("/api/v1/repositories/" + testRepository.getId()))
-                .andExpect(status().is3xxRedirection());
+                .andExpect(status().isUnauthorized());
     }
 }

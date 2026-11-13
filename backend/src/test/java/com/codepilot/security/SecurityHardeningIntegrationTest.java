@@ -8,7 +8,10 @@ import com.codepilot.repository.RepositoryRepository;
 import com.codepilot.repository.UserRepository;
 import com.codepilot.service.EncryptionService;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -35,6 +38,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class SecurityHardeningIntegrationTest {
 
     @Autowired
@@ -89,10 +93,14 @@ class SecurityHardeningIntegrationTest {
     }
 
     @Test
-    void csrfEndpointIssuesXsrfCookie() throws Exception {
-        mockMvc.perform(get("/api/v1/auth/csrf"))
+    @Order(1)
+    void csrfEndpointIssuesXsrfCookieAndExposedHeader() throws Exception {
+        MvcResult result = mockMvc.perform(get("/api/v1/auth/csrf"))
                 .andExpect(status().isNoContent())
-                .andExpect(cookie().exists("XSRF-TOKEN"));
+                .andExpect(header().exists("X-XSRF-TOKEN"))
+                .andReturn();
+        assertThat(result.getResponse().getHeader("Set-Cookie")).contains("XSRF-TOKEN=");
+        assertThat(result.getResponse().getHeader("Set-Cookie")).contains("Path=/");
     }
 
     @Test
@@ -132,7 +140,8 @@ class SecurityHardeningIntegrationTest {
                         .header("Access-Control-Request-Headers", "X-XSRF-TOKEN,Content-Type"))
                 .andExpect(status().isOk())
                 .andExpect(header().string("Access-Control-Allow-Origin", "http://localhost:3000"))
-                .andExpect(header().string("Access-Control-Allow-Credentials", "true"));
+                .andExpect(header().string("Access-Control-Allow-Credentials", "true"))
+                .andExpect(header().string("Access-Control-Expose-Headers", "X-XSRF-TOKEN"));
 
         mockMvc.perform(options("/api/v1/dashboard")
                         .header("Origin", "https://evil.example.com")
@@ -220,6 +229,40 @@ class SecurityHardeningIntegrationTest {
             assertThat(req.getServerName()).isEqualTo("api.codepilot.example");
             assertThat(req.getServerPort()).isEqualTo(443);
         });
+    }
+
+    @Test
+    void unauthenticatedApiRequestsReturn401JsonInsteadOfOAuthRedirect() throws Exception {
+        mockMvc.perform(get("/api/v1/auth/me")
+                        .header("Origin", "http://localhost:3000"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(header().string("Access-Control-Allow-Origin", "http://localhost:3000"))
+                .andExpect(jsonPath("$.status").value(401));
+
+        mockMvc.perform(post("/api/v1/repositories/sync")
+                        .with(csrf()))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void credentialedSessionRemainsAuthenticatedUntilLogout() throws Exception {
+        MockHttpSession session = new MockHttpSession();
+        mockMvc.perform(get("/api/v1/auth/me")
+                        .session(session)
+                        .with(oauth2Login().attributes(attrs -> {
+                            attrs.put("id", 10001);
+                            attrs.put("login", userA.getUsername());
+                            attrs.put("email", userA.getEmail());
+                        })))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.email").value(userA.getEmail()));
+
+        mockMvc.perform(post("/api/v1/auth/logout")
+                        .session(session)
+                        .with(csrf()))
+                .andExpect(status().isNoContent());
+
+        assertThat(session.isInvalid()).isTrue();
     }
 }
 

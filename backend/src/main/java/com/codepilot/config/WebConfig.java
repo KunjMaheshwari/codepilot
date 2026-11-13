@@ -34,6 +34,7 @@ public class WebConfig implements WebMvcConfigurer {
     public void addCorsMappings(CorsRegistry registry) {
         String[] trustedOrigins = allowedOrigins.stream()
                 .map(String::trim)
+                .map(origin -> origin.endsWith("/") ? origin.substring(0, origin.length() - 1) : origin)
                 .filter(origin -> !origin.isBlank() && !"*".equals(origin))
                 .toArray(String[]::new);
 
@@ -41,6 +42,7 @@ public class WebConfig implements WebMvcConfigurer {
                 .allowedOrigins(trustedOrigins)
                 .allowedMethods("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
                 .allowedHeaders("Content-Type", "X-XSRF-TOKEN", "Authorization", "Accept")
+                .exposedHeaders("X-XSRF-TOKEN")
                 .allowCredentials(true);
     }
 }
