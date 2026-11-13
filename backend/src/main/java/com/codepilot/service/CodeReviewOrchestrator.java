@@ -2,6 +2,7 @@ package com.codepilot.service;
 
 import com.codepilot.ai.CodeReviewProvider;
 import com.codepilot.ai.DiffParser;
+import com.codepilot.exception.GeminiApiException;
 import com.codepilot.exception.GitHubApiException;
 import com.codepilot.model.PullRequest;
 import com.codepilot.model.Repository;
@@ -83,6 +84,9 @@ public class CodeReviewOrchestrator {
             log.error("Failed to orchestrate review jobId={} correlationId={} category={} reason={}",
                     job.getId(), job.getCorrelationId(), classification.category(), classification.message());
             job.setLastErrorCategory(classification.category());
+            if (e instanceof GeminiApiException geminiEx) {
+                job.setRetryAfterSeconds(geminiEx.getRetryAfterSeconds());
+            }
             reviewJobService.markFailed(job, classification.message());
 
             Review review = job.getReview();
@@ -98,6 +102,10 @@ public class CodeReviewOrchestrator {
         String message = e.getMessage() != null && !e.getMessage().isBlank()
                 ? e.getMessage()
                 : "Review processing failed";
+
+        if (e instanceof GeminiApiException geminiEx) {
+            return new FailureClassification(geminiEx.getErrorCategory(), message);
+        }
 
         if (e instanceof GitHubApiException githubEx) {
             if (githubEx.getStatus() == HttpStatus.UNPROCESSABLE_ENTITY

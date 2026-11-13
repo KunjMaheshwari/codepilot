@@ -66,6 +66,7 @@ codepilot:
       webhook-requests-per-minute: ${CODEPILOT_WEBHOOK_RATE_LIMIT:300}
   encryption:
     key: ${ENCRYPTION_KEY}
+    previous-keys: ${ENCRYPTION_PREVIOUS_KEYS:}
   review:
     publish-comments-enabled: ${CODEPILOT_REVIEW_PUBLISH_COMMENTS_ENABLED:false}
     max-file-bytes: ${CODEPILOT_REVIEW_MAX_FILE_BYTES:102400}
@@ -91,7 +92,9 @@ gemini:
   api:
     key: ${GEMINI_API_KEY}
     url: ${GEMINI_API_URL:https://generativelanguage.googleapis.com}
-    model: ${GEMINI_MODEL:${GEMINI_API_MODEL:gemini-3.8-flash}}
+    model: ${GEMINI_API_MODEL:gemini-3-flash-preview}
+    connect-timeout-ms: ${GEMINI_CONNECT_TIMEOUT_MS:5000}
+    read-timeout-ms: ${GEMINI_READ_TIMEOUT_MS:45000}
 
 github:
   webhook:

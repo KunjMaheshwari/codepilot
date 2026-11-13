@@ -109,4 +109,67 @@ test.describe("Reviews Workspace & Settings", () => {
     await expect(page.getByRole("button", { name: /Reconnect GitHub/i })).toBeVisible();
     void mockReviews;
   });
+
+  test("displays retrying status and distinct failure errorCategory diagnostics", async ({ page, consoleErrors }) => {
+    void consoleErrors;
+    await setupAuthenticatedApi(page);
+
+    const retryingReview = {
+      id: "44444444-4444-4444-4444-444444444451",
+      pullRequestId: "33333333-3333-3333-3333-333333333331",
+      jobId: "66666666-6666-6666-6666-666666666651",
+      status: "RETRYING",
+      createdAt: "2026-11-13T10:00:00Z",
+    };
+    const failedGeminiReview = {
+      id: "44444444-4444-4444-4444-444444444452",
+      pullRequestId: "33333333-3333-3333-3333-333333333331",
+      jobId: "66666666-6666-6666-6666-666666666652",
+      status: "FAILED",
+      createdAt: "2026-11-13T09:50:00Z",
+    };
+
+    await page.route("**/api/v1/reviews?*", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(pageOf([retryingReview, failedGeminiReview])),
+      }),
+    );
+
+    await page.route(`**/api/v1/reviews/${retryingReview.id}/job`, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          jobId: retryingReview.jobId,
+          reviewId: retryingReview.id,
+          status: "RETRYING",
+          attemptCount: 1,
+          errorMessage: "Gemini review request failed with status 503",
+        }),
+      }),
+    );
+
+    await page.route(`**/api/v1/reviews/${failedGeminiReview.id}/job`, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          jobId: failedGeminiReview.jobId,
+          reviewId: failedGeminiReview.id,
+          status: "FAILED",
+          attemptCount: 1,
+          errorCategory: "GEMINI_API_ERROR",
+          errorMessage: "Gemini review request failed with status 404 for model 'gemini-2.5-flash'",
+        }),
+      }),
+    );
+
+    await page.goto("/dashboard/reviews");
+    await expect(page.getByText(/Review job is currently retrying/i)).toBeVisible();
+
+    await page.getByRole("button", { name: /44444444/i }).nth(1).click();
+    await expect(page.getByText(/Gemini API failure:/i)).toBeVisible();
+  });
 });

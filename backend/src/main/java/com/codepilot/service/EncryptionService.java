@@ -4,13 +4,16 @@ import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import javax.crypto.AEADBadTagException;
 import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.List;
 
 @Service
 public class EncryptionService {
@@ -24,12 +27,28 @@ public class EncryptionService {
     @Value("${codepilot.encryption.key}")
     private String encryptionKeyHex;
 
+    @Value("${codepilot.encryption.previous-keys:}")
+    private String previousKeysCsv;
+
     private SecretKey secretKey;
+    private List<SecretKey> fallbackKeys = List.of();
 
     @PostConstruct
     public void init() {
         byte[] keyBytes = decodeKey(encryptionKeyHex);
         this.secretKey = new SecretKeySpec(keyBytes, "AES");
+        if (previousKeysCsv != null && !previousKeysCsv.isBlank()) {
+            List<SecretKey> parsed = new ArrayList<>();
+            for (String candidate : previousKeysCsv.split(",")) {
+                String trimmed = candidate.trim();
+                if (!trimmed.isEmpty()) {
+                    parsed.add(new SecretKeySpec(decodeKey(trimmed), "AES"));
+                }
+            }
+            this.fallbackKeys = List.copyOf(parsed);
+        } else {
+            this.fallbackKeys = List.of();
+        }
     }
 
     public String encrypt(String plainText) {
@@ -73,15 +92,29 @@ public class EncryptionService {
             byte[] cipherText = new byte[encryptedData.length - NONCE_LENGTH_BYTES];
             System.arraycopy(encryptedData, NONCE_LENGTH_BYTES, cipherText, 0, cipherText.length);
 
-            Cipher cipher = Cipher.getInstance(ALGORITHM);
-            GCMParameterSpec gcmParameterSpec = new GCMParameterSpec(TAG_LENGTH_BIT, nonce);
-            cipher.init(Cipher.DECRYPT_MODE, secretKey, gcmParameterSpec);
-
-            byte[] plainText = cipher.doFinal(cipherText);
-            return new String(plainText, StandardCharsets.UTF_8);
+            try {
+                return decryptWithKey(secretKey, nonce, cipherText);
+            } catch (AEADBadTagException primaryMismatch) {
+                for (SecretKey fallback : fallbackKeys) {
+                    try {
+                        return decryptWithKey(fallback, nonce, cipherText);
+                    } catch (AEADBadTagException ignored) {
+                        // Try next configured fallback rotation key.
+                    }
+                }
+                throw primaryMismatch;
+            }
         } catch (Exception e) {
             throw new IllegalStateException("Failed to decrypt data", e);
         }
+    }
+
+    private String decryptWithKey(SecretKey key, byte[] nonce, byte[] cipherText) throws Exception {
+        Cipher cipher = Cipher.getInstance(ALGORITHM);
+        GCMParameterSpec gcmParameterSpec = new GCMParameterSpec(TAG_LENGTH_BIT, nonce);
+        cipher.init(Cipher.DECRYPT_MODE, key, gcmParameterSpec);
+        byte[] plainText = cipher.doFinal(cipherText);
+        return new String(plainText, StandardCharsets.UTF_8);
     }
 
     private byte[] decodeKey(String hexString) {

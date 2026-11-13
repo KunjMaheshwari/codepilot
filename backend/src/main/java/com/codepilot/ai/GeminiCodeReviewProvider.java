@@ -1,5 +1,6 @@
 package com.codepilot.ai;
 
+import com.codepilot.exception.GeminiApiException;
 import com.codepilot.model.ReviewFinding;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -9,6 +10,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
@@ -20,16 +22,14 @@ import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
 
 @Service
 @Slf4j
 public class GeminiCodeReviewProvider implements CodeReviewProvider {
 
-    private static final int MAX_ATTEMPTS = 3;
-    private static final long BASE_RETRY_DELAY_MS = 250L;
-    private static final long MAX_RETRY_WAIT_MS = 5000L;
+    private static final long MAX_CONNECT_TIMEOUT_MS = 30_000L;
+    private static final long MAX_READ_TIMEOUT_MS = 120_000L;
 
     private static final Map<String, Object> FINDING_RESPONSE_SCHEMA = Map.of(
             "type", "ARRAY",
@@ -74,7 +74,7 @@ public class GeminiCodeReviewProvider implements CodeReviewProvider {
     @Value("${gemini.api.url}")
     private String apiUrl;
 
-    @Value("${gemini.api.model:gemini-3.8-flash}")
+    @Value("${gemini.api.model:gemini-3-flash-preview}")
     private String model;
 
     @Autowired
@@ -82,14 +82,26 @@ public class GeminiCodeReviewProvider implements CodeReviewProvider {
             RestTemplateBuilder restTemplateBuilder,
             ObjectMapper objectMapper,
             ReviewResponseValidator responseValidator,
-            ReviewPromptBuilder reviewPromptBuilder) {
+            ReviewPromptBuilder reviewPromptBuilder,
+            @Value("${gemini.api.connect-timeout-ms:5000}") long connectTimeoutMs,
+            @Value("${gemini.api.read-timeout-ms:45000}") long readTimeoutMs) {
+        long boundedConnectMs = Math.max(1000L, Math.min(connectTimeoutMs, MAX_CONNECT_TIMEOUT_MS));
+        long boundedReadMs = Math.max(1000L, Math.min(readTimeoutMs, MAX_READ_TIMEOUT_MS));
         this.restTemplate = restTemplateBuilder
-                .setConnectTimeout(Duration.ofSeconds(5))
-                .setReadTimeout(Duration.ofSeconds(60))
+                .setConnectTimeout(Duration.ofMillis(boundedConnectMs))
+                .setReadTimeout(Duration.ofMillis(boundedReadMs))
                 .build();
         this.objectMapper = objectMapper;
         this.responseValidator = responseValidator;
         this.reviewPromptBuilder = reviewPromptBuilder;
+    }
+
+    public GeminiCodeReviewProvider(
+            RestTemplateBuilder restTemplateBuilder,
+            ObjectMapper objectMapper,
+            ReviewResponseValidator responseValidator,
+            ReviewPromptBuilder reviewPromptBuilder) {
+        this(restTemplateBuilder, objectMapper, responseValidator, reviewPromptBuilder, 5000L, 45000L);
     }
 
     public long getSuccessCount() {
@@ -137,7 +149,11 @@ public class GeminiCodeReviewProvider implements CodeReviewProvider {
 
     private String invokeGemini(String systemInstruction, String userContent) {
         if (apiKey == null || apiKey.isBlank()) {
-            throw new IllegalStateException("Gemini API key is not configured");
+            throw new GeminiApiException(
+                    "Gemini API key is not configured",
+                    HttpStatus.UNAUTHORIZED,
+                    "GEMINI_API_ERROR",
+                    false);
         }
 
         String baseUrl = normalizeBaseUrl(apiUrl);
@@ -158,95 +174,112 @@ public class GeminiCodeReviewProvider implements CodeReviewProvider {
         requestBody.put("generationConfig", generationConfig);
 
         long startNanos = System.nanoTime();
-        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-            try {
-                HttpHeaders headers = new HttpHeaders();
-                headers.setContentType(MediaType.APPLICATION_JSON);
-                headers.set("x-goog-api-key", apiKey);
-                ResponseEntity<String> response = restTemplate.postForEntity(
-                        endpoint, new HttpEntity<>(requestBody, headers), String.class);
-                String text = extractText(response.getBody());
-                successCount.incrementAndGet();
-                long latencyMs = (System.nanoTime() - startNanos) / 1_000_000L;
-                log.info("gemini_request_success model={} attempts={} latencyMs={}", model, attempt, latencyMs);
-                return text;
-            } catch (HttpStatusCodeException exception) {
-                int status = exception.getStatusCode().value();
-                boolean retryable = status == 429 || status >= 500;
-                if (!retryable || attempt == MAX_ATTEMPTS) {
-                    failureCount.incrementAndGet();
-                    long latencyMs = (System.nanoTime() - startNanos) / 1_000_000L;
-                    String safeError = extractSafeErrorDetail(exception.getResponseBodyAsString());
-                    log.warn("gemini_request_failed status={} model={} attempts={} latencyMs={} reason={}",
-                            status, resolvedModel, attempt, latencyMs, safeError != null ? safeError : "http_error");
-                    String detailSuffix = safeError != null ? ": " + safeError : "";
-                    throw new IllegalStateException(
-                            "Gemini review request failed with status " + status + " for model '" + resolvedModel + "'" + detailSuffix,
-                            exception);
-                }
-                long delayMs = computeRetryDelayMs(attempt, exception.getResponseHeaders());
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            headers.set("x-goog-api-key", apiKey);
+            ResponseEntity<String> response = restTemplate.postForEntity(
+                    endpoint, new HttpEntity<>(requestBody, headers), String.class);
+            String text = extractText(response.getBody());
+            successCount.incrementAndGet();
+            long latencyMs = (System.nanoTime() - startNanos) / 1_000_000L;
+            log.info("gemini_request_success model={} latencyMs={}", resolvedModel, latencyMs);
+            return text;
+        } catch (HttpStatusCodeException exception) {
+            failureCount.incrementAndGet();
+            int statusCode = exception.getStatusCode().value();
+            HttpStatus status = HttpStatus.resolve(statusCode);
+            long latencyMs = (System.nanoTime() - startNanos) / 1_000_000L;
+            String safeError = extractSafeErrorDetail(exception.getResponseBodyAsString());
+            Long retryAfterSeconds = parseRetryAfterSeconds(exception.getResponseHeaders());
+            boolean retryable = statusCode == 429 || statusCode >= 500;
+            String category = retryable ? "GEMINI_API_TRANSIENT" : "GEMINI_API_ERROR";
+            if (retryable) {
                 retryCount.incrementAndGet();
-                log.warn("gemini_retry attempt={} status={} delayMs={}", attempt, status, delayMs);
-                waitBeforeRetry(delayMs);
-            } catch (ResourceAccessException exception) {
-                if (attempt == MAX_ATTEMPTS) {
-                    failureCount.incrementAndGet();
-                    long latencyMs = (System.nanoTime() - startNanos) / 1_000_000L;
-                    log.warn("gemini_request_failed reason=timeout_or_io attempts={} latencyMs={}", attempt, latencyMs);
-                    throw new IllegalStateException("Gemini review request failed due to timeout or network error", exception);
-                }
-                long delayMs = computeRetryDelayMs(attempt, null);
-                retryCount.incrementAndGet();
-                log.warn("gemini_retry attempt={} reason=timeout_or_io delayMs={}", attempt, delayMs);
-                waitBeforeRetry(delayMs);
-            } catch (IllegalStateException exception) {
-                failureCount.incrementAndGet();
-                long latencyMs = (System.nanoTime() - startNanos) / 1_000_000L;
-                log.warn("gemini_request_failed reason=invalid_response attempts={} latencyMs={}", attempt, latencyMs);
-                throw exception;
             }
+            log.warn("gemini_request_failed status={} model={} retryable={} latencyMs={} reason={}",
+                    statusCode, resolvedModel, retryable, latencyMs, safeError != null ? safeError : "http_error");
+            String detailSuffix = safeError != null ? ": " + safeError : "";
+            throw new GeminiApiException(
+                    "Gemini review request failed with status " + statusCode + " for model '" + resolvedModel + "'" + detailSuffix,
+                    status != null ? status : HttpStatus.BAD_GATEWAY,
+                    category,
+                    retryable,
+                    retryAfterSeconds,
+                    exception);
+        } catch (ResourceAccessException exception) {
+            failureCount.incrementAndGet();
+            retryCount.incrementAndGet();
+            long latencyMs = (System.nanoTime() - startNanos) / 1_000_000L;
+            log.warn("gemini_request_failed reason=timeout_or_io model={} latencyMs={}", resolvedModel, latencyMs);
+            throw new GeminiApiException(
+                    "Gemini review request failed due to timeout or network error",
+                    HttpStatus.GATEWAY_TIMEOUT,
+                    "GEMINI_API_TRANSIENT",
+                    true,
+                    null,
+                    exception);
+        } catch (GeminiApiException exception) {
+            failureCount.incrementAndGet();
+            long latencyMs = (System.nanoTime() - startNanos) / 1_000_000L;
+            log.warn("gemini_request_failed reason=invalid_response model={} latencyMs={}", resolvedModel, latencyMs);
+            throw exception;
         }
-        failureCount.incrementAndGet();
-        throw new IllegalStateException("Gemini review request failed");
     }
 
     private String extractText(String body) {
         if (body == null || body.isBlank()) {
-            throw new IllegalStateException("Gemini response body was empty");
+            throw new GeminiApiException(
+                    "Gemini response body was empty",
+                    HttpStatus.BAD_GATEWAY,
+                    "INVALID_AI_RESPONSE",
+                    true);
         }
         try {
             JsonNode root = objectMapper.readTree(body);
             JsonNode blockReason = root.path("promptFeedback").path("blockReason");
             if (blockReason.isTextual() && !blockReason.asText().isBlank()) {
-                throw new IllegalStateException("Gemini blocked the review request: " + blockReason.asText());
+                throw new GeminiApiException(
+                        "Gemini blocked the review request: " + blockReason.asText(),
+                        HttpStatus.UNPROCESSABLE_ENTITY,
+                        "GEMINI_API_ERROR",
+                        false);
             }
             JsonNode text = root.path("candidates").path(0).path("content").path("parts").path(0).path("text");
             if (!text.isTextual() || text.asText().isBlank()) {
-                throw new IllegalStateException("Gemini response did not contain structured review content");
+                throw new GeminiApiException(
+                        "Gemini response did not contain structured review content",
+                        HttpStatus.BAD_GATEWAY,
+                        "INVALID_AI_RESPONSE",
+                        true);
             }
             return text.asText();
-        } catch (IllegalStateException exception) {
+        } catch (GeminiApiException exception) {
             throw exception;
         } catch (Exception exception) {
-            throw new IllegalStateException("Gemini response was malformed", exception);
+            throw new GeminiApiException(
+                    "Gemini response was malformed",
+                    HttpStatus.BAD_GATEWAY,
+                    "INVALID_AI_RESPONSE",
+                    true,
+                    null,
+                    exception);
         }
     }
 
-    private long computeRetryDelayMs(int attempt, HttpHeaders headers) {
-        if (headers != null) {
-            String retryAfter = headers.getFirst(HttpHeaders.RETRY_AFTER);
-            if (retryAfter != null && !retryAfter.isBlank()) {
-                try {
-                    long seconds = Long.parseLong(retryAfter.trim());
-                    return Math.min(MAX_RETRY_WAIT_MS, Math.max(0L, seconds * 1000L));
-                } catch (NumberFormatException ignored) {
-                    // Fall back to exponential backoff when Retry-After is not numeric seconds
-                }
-            }
+    private Long parseRetryAfterSeconds(HttpHeaders headers) {
+        if (headers == null) {
+            return null;
         }
-        long exponential = BASE_RETRY_DELAY_MS * (1L << Math.min(attempt - 1, 4));
-        long jitter = ThreadLocalRandom.current().nextLong(0L, 150L);
-        return Math.min(MAX_RETRY_WAIT_MS, exponential + jitter);
+        String retryAfter = headers.getFirst(HttpHeaders.RETRY_AFTER);
+        if (retryAfter == null || retryAfter.isBlank()) {
+            return null;
+        }
+        try {
+            return Math.max(0L, Long.parseLong(retryAfter.trim()));
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     private String normalizeBaseUrl(String rawUrl) {
@@ -259,7 +292,7 @@ public class GeminiCodeReviewProvider implements CodeReviewProvider {
 
     private String normalizeModel(String rawModel) {
         if (rawModel == null || rawModel.isBlank()) {
-            return "gemini-3.8-flash";
+            return "gemini-3-flash-preview";
         }
         String trimmed = rawModel.trim();
         return trimmed.startsWith("models/") ? trimmed.substring("models/".length()) : trimmed;
@@ -285,18 +318,6 @@ public class GeminiCodeReviewProvider implements CodeReviewProvider {
             return combined.length() > 240 ? combined.substring(0, 240) : combined;
         } catch (Exception ignored) {
             return null;
-        }
-    }
-
-    private void waitBeforeRetry(long delayMs) {
-        if (delayMs <= 0) {
-            return;
-        }
-        try {
-            Thread.sleep(delayMs);
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Gemini retry interrupted", exception);
         }
     }
 }

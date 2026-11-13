@@ -259,6 +259,21 @@ export async function setupAuthenticatedApi(page: Page, options?: { empty?: bool
       });
     }
 
+    if (path.endsWith("/job") && path.startsWith("/api/v1/reviews/") && method === "GET") {
+      const reviewId = path.split("/")[4];
+      const review = mockReviews.find((item) => item.id === reviewId) ?? mockReviews[0];
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          jobId: review.jobId,
+          reviewId: review.id,
+          status: review.status,
+          attemptCount: 1,
+        }),
+      });
+    }
+
     return route.fulfill({
       status: 404,
       contentType: "application/json",

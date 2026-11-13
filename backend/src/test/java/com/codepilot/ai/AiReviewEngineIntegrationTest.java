@@ -207,10 +207,6 @@ class AiReviewEngineIntegrationTest {
                 .andExpect(method(HttpMethod.POST))
                 .andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS));
 
-        mockServer.expect(ExpectedCount.once(), requestTo("http://mock/v1beta/models/mock:generateContent"))
-                .andExpect(method(HttpMethod.POST))
-                .andRespond(withSuccess(geminiResponse, MediaType.APPLICATION_JSON));
-
         CreateReviewRequest request = new CreateReviewRequest();
         request.setPullRequestId(testPr.getId());
 
@@ -218,7 +214,7 @@ class AiReviewEngineIntegrationTest {
 
         mockServer.verify();
         Review savedReview = reviewRepository.findById(reviewDto.getId()).orElseThrow();
-        assertThat(savedReview.getStatus()).isEqualTo("COMPLETED");
+        assertThat(savedReview.getStatus()).isEqualTo("FAILED");
     }
 
     @Test
@@ -237,13 +233,7 @@ class AiReviewEngineIntegrationTest {
 
         mockServer.expect(ExpectedCount.once(), requestTo("http://mock/v1beta/models/mock:generateContent"))
                 .andExpect(method(HttpMethod.POST))
-                .andRespond(withStatus(HttpStatus.INTERNAL_SERVER_ERROR));
-        mockServer.expect(ExpectedCount.once(), requestTo("http://mock/v1beta/models/mock:generateContent"))
-                .andExpect(method(HttpMethod.POST))
-                .andRespond(withStatus(HttpStatus.INTERNAL_SERVER_ERROR));
-        mockServer.expect(ExpectedCount.once(), requestTo("http://mock/v1beta/models/mock:generateContent"))
-                .andExpect(method(HttpMethod.POST))
-                .andRespond(withStatus(HttpStatus.INTERNAL_SERVER_ERROR));
+                .andRespond(withStatus(HttpStatus.NOT_FOUND));
 
         CreateReviewRequest request = new CreateReviewRequest();
         request.setPullRequestId(testPr.getId());

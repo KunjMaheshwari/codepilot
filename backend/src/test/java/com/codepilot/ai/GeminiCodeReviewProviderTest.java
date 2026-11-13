@@ -1,5 +1,6 @@
 package com.codepilot.ai;
 
+import com.codepilot.exception.GeminiApiException;
 import com.codepilot.model.ReviewFinding;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -85,19 +86,22 @@ class GeminiCodeReviewProviderTest {
     }
 
     @Test
-    void retriesTimeoutAndExhaustsAfterMaxAttempts() {
-        for (int i = 0; i < 3; i++) {
-            mockServer.expect(requestTo("https://gemini.test/v1beta/models/gemini-2.5-flash:generateContent"))
-                    .andRespond(request -> {
-                        throw new ResourceAccessException("Read timed out");
-                    });
-        }
+    void classifiesTimeoutAsTransientWithoutBlockingWorkerThread() {
+        mockServer.expect(requestTo("https://gemini.test/v1beta/models/gemini-2.5-flash:generateContent"))
+                .andRespond(request -> {
+                    throw new ResourceAccessException("Read timed out");
+                });
 
         assertThatThrownBy(() -> provider.reviewDiff("diff", List.of(sampleFile)))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("timeout");
+                .isInstanceOf(GeminiApiException.class)
+                .hasMessageContaining("timeout")
+                .satisfies(ex -> {
+                    GeminiApiException gex = (GeminiApiException) ex;
+                    assertThat(gex.isRetryable()).isTrue();
+                    assertThat(gex.getErrorCategory()).isEqualTo("GEMINI_API_TRANSIENT");
+                });
         mockServer.verify();
-        assertThat(provider.getRetryCount()).isEqualTo(2);
+        assertThat(provider.getRetryCount()).isEqualTo(1);
         assertThat(provider.getFailureCount()).isEqualTo(1);
     }
 
@@ -171,24 +175,52 @@ class GeminiCodeReviewProviderTest {
     }
 
     @Test
-    void retriesQuota429ErrorsAndExhaustsAfterMaxAttempts() {
+    void classifiesQuota429AsRetryableAndCapturesRetryAfterHeader() {
         String quotaBody = """
                 {"error":{"code":429,"message":"Quota exceeded","status":"RESOURCE_EXHAUSTED"}}
                 """;
-        for (int i = 0; i < 3; i++) {
-            mockServer.expect(requestTo("https://gemini.test/v1beta/models/gemini-2.5-flash:generateContent"))
-                    .andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS)
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .body(quotaBody));
-        }
+        org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+        headers.add("Retry-After", "15");
+        mockServer.expect(requestTo("https://gemini.test/v1beta/models/gemini-2.5-flash:generateContent"))
+                .andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS)
+                        .headers(headers)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(quotaBody));
 
         assertThatThrownBy(() -> provider.reviewDiff("diff", List.of(sampleFile)))
-                .isInstanceOf(IllegalStateException.class)
+                .isInstanceOf(GeminiApiException.class)
                 .hasMessageContaining("429")
-                .hasMessageContaining("RESOURCE_EXHAUSTED");
+                .hasMessageContaining("RESOURCE_EXHAUSTED")
+                .satisfies(ex -> {
+                    GeminiApiException gex = (GeminiApiException) ex;
+                    assertThat(gex.isRetryable()).isTrue();
+                    assertThat(gex.getRetryAfterSeconds()).isEqualTo(15L);
+                    assertThat(gex.getErrorCategory()).isEqualTo("GEMINI_API_TRANSIENT");
+                });
         mockServer.verify();
-        assertThat(provider.getRetryCount()).isEqualTo(2);
+        assertThat(provider.getRetryCount()).isEqualTo(1);
         assertThat(provider.getFailureCount()).isEqualTo(1);
+    }
+
+    @Test
+    void classifies503AsTransientServerFailure() {
+        String unavailableBody = """
+                {"error":{"code":503,"message":"High demand","status":"UNAVAILABLE"}}
+                """;
+        mockServer.expect(requestTo("https://gemini.test/v1beta/models/gemini-2.5-flash:generateContent"))
+                .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(unavailableBody));
+
+        assertThatThrownBy(() -> provider.reviewDiff("diff", List.of(sampleFile)))
+                .isInstanceOf(GeminiApiException.class)
+                .hasMessageContaining("503")
+                .satisfies(ex -> {
+                    GeminiApiException gex = (GeminiApiException) ex;
+                    assertThat(gex.isRetryable()).isTrue();
+                    assertThat(gex.getErrorCategory()).isEqualTo("GEMINI_API_TRANSIENT");
+                });
+        mockServer.verify();
     }
 
     @Test
@@ -197,8 +229,9 @@ class GeminiCodeReviewProviderTest {
                 .andRespond(withSuccess("not-json", MediaType.APPLICATION_JSON));
 
         assertThatThrownBy(() -> provider.reviewDiff("diff", List.of(sampleFile)))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("malformed");
+                .isInstanceOf(GeminiApiException.class)
+                .hasMessageContaining("malformed")
+                .satisfies(ex -> assertThat(((GeminiApiException) ex).getErrorCategory()).isEqualTo("INVALID_AI_RESPONSE"));
         mockServer.verify();
     }
 }

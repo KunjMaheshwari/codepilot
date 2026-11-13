@@ -200,4 +200,10 @@ class ReviewJobWorkerTest {
         verify(listOperations, never()).leftPush(eq("dead-letter"), org.mockito.ArgumentMatchers.anyString());
         verify(listOperations).remove("processing", 1, payload);
     }
+
+    @Test
+    void respectsRetryAfterSecondsWhenComputingDelayedRetryBackoff() {
+        long delayMs = worker.computeRetryDelayMillis(1, 25L);
+        assertThat(delayMs).isGreaterThanOrEqualTo(25_000L).isLessThanOrEqualTo(60_000L);
+    }
 }

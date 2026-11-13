@@ -562,8 +562,8 @@ While the repository has a clean architectural skeleton (Spring Boot 3.2.3 API +
 
 ### 9. Testing Assessment & Evidence Matrix
 - **Verified in automated tests**:
-  - Backend: `mvn clean test -B && mvn verify -B` -> **128 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`) using Testcontainers (`postgres:17-alpine`, `redis:7-alpine`).
-  - Frontend: `npm run lint` (0 errors), `npx tsc --noEmit` (0 errors), `npm run build` (standalone build succeeded), `npx playwright test` (**14 passed in 7.9s** against the rebuilt Docker Compose `frontend` container).
+  - Backend: `mvn clean test -B && mvn verify -B` -> **131 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`) using Testcontainers (`postgres:17-alpine`, `redis:7-alpine`).
+  - Frontend: `npm run lint` (0 errors), `npx tsc --noEmit` (0 errors), `npm run build` (standalone build succeeded), `npx playwright test` (**15 passed in 2.5s**).
 - **Verified locally (containerized)**:
   - `docker compose --env-file .env.example config -q` valid; `backend` and `frontend` images built cleanly.
   - Isolated `codepilot-verify` Compose stack (`18080`/`13000`): all 4 containers `healthy`, Flyway `V1`–`V7` applied, `/actuator/health/readiness` (`UP`), `/api/health` (`ok`), CORS + `XSRF-TOKEN`, `X-Forwarded-Proto: https` OAuth `redirect_uri` rewrite, non-root users (`codepilot`, `nextjs`), and PostgreSQL/Redis volume persistence across `down` -> `up` restart.
@@ -691,3 +691,38 @@ curl -fsS -H "x-goog-api-key: $GEMINI_API_KEY" \
 5. Build the frontend image with `NEXT_PUBLIC_API_BASE_URL=https://<backend-domain>`.
 6. Register the GitHub OAuth callback URL (`https://<backend-domain>/login/oauth2/code/github`) and webhook URL (`https://<backend-domain>/api/v1/webhooks/github`).
 7. Keep `CODEPILOT_REVIEW_PUBLISH_COMMENTS_ENABLED=false` during initial smoke testing; enable only after verifying review quality in staging.
+
+---
+
+## 16. Gemini AI Pipeline Reliability, Timeout & Key-Rotation Audit (Latest)
+
+### 16.1 Root Causes Identified
+- **Stale Model & Upstream Latency/Availability**:
+  - `gemini-2.5-flash` returned HTTP `404` ("no longer available to new users").
+  - `gemini-3.8-flash` is listed in `/v1beta/models` (`GET` HTTP `200` in `0.28s`), but live `:generateContent` calls exhibited intermittent `503 UNAVAILABLE` ("high demand") and read timeouts (`30.06s` timeout in latest smoke test).
+  - `gemini-3-flash-preview` succeeded consistently against the live API (`GET` HTTP `200` in `0.27s`, minimal `POST :generateContent` HTTP `200` in `0.82s`).
+- **Blocking `Thread.sleep()` & Multiplied Timeouts in Worker**:
+  - `GeminiCodeReviewProvider.invokeGemini` previously ran an internal 3-attempt loop with `60s` read timeouts and `Thread.sleep()`, causing ~154s worker stalls and violating non-blocking worker execution.
+- **Stale Container Environment Propagation**:
+  - Before container recreation, `codepilot-backend-1` held a stale `GEMINI_API_KEY` (SHA-256 prefix `2ba5444f...` vs `.env` `3fdf3f29c069e7b3`).
+- **Frontend Diagnostics Gap for `FAILED` Reviews**:
+  - `ReviewsPage` previously fetched `/api/v1/reviews/{id}/job` only for active job statuses, hiding `errorCategory` and `errorMessage` on `FAILED` reviews.
+
+### 16.2 Implemented Fixes
+- **Single-Source Model Config & Bounded HTTP Client (`GeminiCodeReviewProvider.java`, `application.yml`, `docker-compose.yml`, `.env.example`)**:
+  - Standardized on `GEMINI_API_MODEL` (defaulting to `gemini-3-flash-preview`).
+  - Removed internal `Thread.sleep()` retry loop so each worker execution performs a single bounded request with configurable `gemini.api.connect-timeout-ms` (default `5000`, max `30000`) and `gemini.api.read-timeout-ms` (default `45000`, max `120000`).
+- **Typed Failure Classification & ZSET Retry Propagation (`GeminiApiException.java`, `ReviewJob.java`, `CodeReviewOrchestrator.java`, `ReviewJobWorker.java`)**:
+  - Added `GeminiApiException` (extending `IllegalStateException`) with `HttpStatus`, `errorCategory`, `retryable`, and `retryAfterSeconds`.
+  - Classified `400`/`401`/`403`/`404` as permanent `GEMINI_API_ERROR`; `429` (parsing `Retry-After`), `5xx`, and network/read timeouts as retryable `GEMINI_API_TRANSIENT`; malformed/empty AI JSON as `INVALID_AI_RESPONSE`.
+  - `ReviewJobWorker` honors `job.getRetryAfterSeconds()` (capped at `60s`) when scheduling Redis ZSET delayed retries.
+- **Zero-Downtime Encryption Key Rotation (`EncryptionService.java`, `application.yml`, `docker-compose.yml`, `.env.example`)**:
+  - Added optional `codepilot.encryption.previous-keys` (`ENCRYPTION_PREVIOUS_KEYS`, comma-separated fallback keys) tried on `AEADBadTagException` during decryption, preserving existing `connected_github_accounts` encrypted tokens without destructive DB resets.
+- **Frontend `FAILED` Review Diagnostics (`frontend/src/app/dashboard/reviews/page.tsx`)**:
+  - Added `useEffect` to fetch `api.getJob(selectedReview.id)` when job metadata is missing so `FAILED` reviews surface `errorCategory` and `errorMessage`.
+
+### 16.3 Verification Status
+- **Backend (`mvn clean test -B && mvn verify -B`)**: **131 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`).
+- **Frontend (`npm run lint && npx tsc --noEmit && npm run build`, `npx playwright test`)**: Lint, typecheck, and production build passed (0 errors); Playwright suite passed (**15 passed in 2.5s**).
+- **Docker Compose (`codepilot-postgres-1`, `codepilot-redis-1`, `codepilot-backend-1`, `codepilot-frontend-1`)**: All 4 services rebuilt and `healthy`; `codepilot-backend-1` env verified to match `.env` (`GEMINI_API_MODEL=gemini-3.8-flash`, `GEMINI_API_URL=https://generativelanguage.googleapis.com`, `GEMINI_API_KEY` SHA-256 prefix `3fdf3f29c069e7b3`).
+- **Live Browser E2E PR Review**: **BLOCKED** for automated headless browser verification because Chrome remote debugging (`DevToolsActivePort`) is unavailable in this environment, and `.env` remains set to `GEMINI_API_MODEL=gemini-3.8-flash` (which timed out at `30.06s` on `:generateContent`, whereas `gemini-3-flash-preview` returned HTTP `200` in `0.82s`).

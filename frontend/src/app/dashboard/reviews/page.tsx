@@ -211,6 +211,25 @@ export default function ReviewsPage() {
     };
   }, [selectedReview, selectedStatus, findingsByReview]);
 
+  // Load job metadata (attempt count, error category, sanitized error message) for the selected review
+  useEffect(() => {
+    if (!selectedReview || jobs[selectedReview.id]) return;
+    let cancelled = false;
+    api
+      .getJob(selectedReview.id)
+      .then((job) => {
+        if (!cancelled) {
+          setJobs((current) => ({ ...current, [selectedReview.id]: job }));
+        }
+      })
+      .catch(() => {
+        // Non-fatal: some legacy or partial records may not expose a ReviewJob
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedReview, jobs]);
+
   const filteredReviews = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     return reviews.filter((review) => {

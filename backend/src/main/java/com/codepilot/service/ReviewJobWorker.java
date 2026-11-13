@@ -104,7 +104,7 @@ public class ReviewJobWorker {
                             job.getId(), job.getCorrelationId(), job.getLastErrorCategory());
                 } else if (job.getAttemptCount() < maxAttempts) {
                     reviewJobService.markRetrying(job, job.getErrorMessage());
-                    long delayMs = computeRetryDelayMillis(job.getAttemptCount());
+                    long delayMs = computeRetryDelayMillis(job.getAttemptCount(), job.getRetryAfterSeconds());
                     long executeAt = System.currentTimeMillis() + delayMs;
                     redisTemplate.opsForZSet().add(retryQueue, payload, executeAt);
                     retryScheduledCount.incrementAndGet();
@@ -150,9 +150,17 @@ public class ReviewJobWorker {
     }
 
     long computeRetryDelayMillis(int attemptCount) {
+        return computeRetryDelayMillis(attemptCount, null);
+    }
+
+    long computeRetryDelayMillis(int attemptCount, Long retryAfterSeconds) {
         long base = Math.min(1000L * (1L << Math.min(Math.max(attemptCount, 1), 5)), 30000L);
         long jitter = ThreadLocalRandom.current().nextLong(0, Math.max(1L, base / 4));
-        return Math.min(base + jitter, 35000L);
+        long backoff = Math.min(base + jitter, 35000L);
+        if (retryAfterSeconds != null && retryAfterSeconds > 0) {
+            return Math.min(Math.max(backoff, retryAfterSeconds * 1000L), 60000L);
+        }
+        return backoff;
     }
 
     public long getProcessedCount() {

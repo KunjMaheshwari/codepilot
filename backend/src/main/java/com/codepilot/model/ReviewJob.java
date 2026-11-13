@@ -60,4 +60,7 @@ public class ReviewJob {
     @UpdateTimestamp
     @Column(nullable = false)
     private ZonedDateTime updatedAt;
+
+    @jakarta.persistence.Transient
+    private Long retryAfterSeconds;
 }
