@@ -20,6 +20,7 @@ jobs:
   backend-test:
     name: Backend Build & Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: backend
@@ -43,6 +44,7 @@ jobs:
   frontend-test:
     name: Frontend Lint, Typecheck, Build & E2E
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: frontend
@@ -88,6 +90,7 @@ jobs:
   docker-validation:
     name: Docker Build & Compose Validation
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: [backend-test, frontend-test]
     steps:
       - name: Checkout repository
@@ -124,7 +127,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=frontend
 
       - name: Scan backend image with Trivy (advisory)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: codepilot-backend:ci
           format: table
@@ -133,7 +136,7 @@ jobs:
           severity: CRITICAL,HIGH
 
       - name: Scan frontend image with Trivy (advisory)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: codepilot-frontend:ci
           format: table
