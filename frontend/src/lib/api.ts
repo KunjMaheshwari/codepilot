@@ -15,9 +15,11 @@ export interface Page<T> {
   content: T[];
   totalElements: number;
   totalPages: number;
-  number: number;
-  size: number;
-  first: boolean;
+  pageNumber?: number;
+  pageSize?: number;
+  number?: number;
+  size?: number;
+  first?: boolean;
   last: boolean;
 }
 
@@ -179,6 +181,25 @@ export const api = {
   getDashboard: () => request<DashboardStats>("/api/v1/dashboard"),
   getRepositories: (page = 0, size = 20) =>
     request<Page<Repository>>(`/api/v1/repositories?page=${page}&size=${size}`),
+  getAllRepositories: async (pageSize = 100): Promise<Repository[]> => {
+    const byId = new Map<string, Repository>();
+    let page = 0;
+    while (page < 1000) {
+      const result = await api.getRepositories(page, pageSize);
+      for (const repo of result.content) {
+        byId.set(repo.id, repo);
+      }
+      if (
+        result.last ||
+        result.content.length === 0 ||
+        (result.totalPages > 0 && page + 1 >= result.totalPages)
+      ) {
+        break;
+      }
+      page += 1;
+    }
+    return Array.from(byId.values());
+  },
   syncRepositories: () =>
     request<Page<Repository>>("/api/v1/repositories/sync", { method: "POST" }),
   getPullRequests: (repositoryId: string, page = 0, size = 20) =>

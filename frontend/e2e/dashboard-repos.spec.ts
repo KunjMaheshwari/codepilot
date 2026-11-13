@@ -94,4 +94,79 @@ test.describe("Dashboard, Repositories & Pull Requests", () => {
     await expect(page.getByRole("link", { name: "Inspect Review" })).toBeVisible();
     expect(reviewPostCount).toBe(1);
   });
+
+  test("loads all repository pages (>100 repositories) and finds repositories beyond the first page", async ({
+    page,
+    consoleErrors,
+  }) => {
+    void consoleErrors;
+    await setupAuthenticatedApi(page);
+
+    const totalRepos = 273;
+    const allRepos = Array.from({ length: totalRepos }, (_, i) => {
+      const isLeetCode = i === 158;
+      return {
+        id: `22222222-2222-2222-2222-${String(i).padStart(12, "0")}`,
+        name: isLeetCode ? "LeetCode" : `repo-${i}`,
+        fullName: isLeetCode ? "KunjMaheshwari/LeetCode" : `KunjMaheshwari/repo-${i}`,
+        description: isLeetCode ? "DSA solutions" : `Repository ${i}`,
+        githubRepoId: String(810000000 + i),
+        isActive: true,
+        isPrivate: false,
+        defaultBranch: "main",
+        htmlUrl: isLeetCode
+          ? "https://github.com/KunjMaheshwari/LeetCode"
+          : `https://github.com/KunjMaheshwari/repo-${i}`,
+        lastSyncedAt: "2026-11-13T05:13:57Z",
+      };
+    });
+
+    await page.route("**/api/v1/repositories**", async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname === "/api/v1/repositories" && route.request().method() === "GET") {
+        const pageNum = Number(url.searchParams.get("page") ?? "0");
+        const size = Number(url.searchParams.get("size") ?? "20");
+        const start = pageNum * size;
+        const slice = allRepos.slice(start, start + size);
+        const totalPages = Math.ceil(totalRepos / size);
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            content: slice,
+            pageNumber: pageNum,
+            pageSize: size,
+            totalElements: totalRepos,
+            totalPages,
+            last: pageNum + 1 >= totalPages,
+          }),
+        });
+      }
+      if (url.pathname === "/api/v1/repositories/sync" && route.request().method() === "POST") {
+        const slice = allRepos.slice(0, 100);
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            content: slice,
+            pageNumber: 0,
+            pageSize: 100,
+            totalElements: totalRepos,
+            totalPages: 3,
+            last: false,
+          }),
+        });
+      }
+      return route.fallback();
+    });
+
+    await page.goto("/dashboard/repositories");
+
+    await page.getByLabel("Search repositories").fill("LeetCode");
+    await expect(page.getByText("KunjMaheshwari/LeetCode")).toBeVisible();
+
+    await page.getByRole("button", { name: /Synchronize GitHub/i }).click();
+    await expect(page.getByText("Loaded 273 repositories from GitHub.")).toBeVisible();
+    await expect(page.getByText("KunjMaheshwari/LeetCode")).toBeVisible();
+  });
 });

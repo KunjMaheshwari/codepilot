@@ -42,8 +42,8 @@ export default function RepositoriesPage() {
     setLoading(true);
     setErrorMessage("");
     try {
-      const page = await api.getRepositories(0, 100);
-      setRepositories(page.content);
+      const allRepos = await api.getAllRepositories();
+      setRepositories(allRepos);
     } catch (error: unknown) {
       setErrorMessage(apiErrorMessage(error));
     } finally {
@@ -54,9 +54,9 @@ export default function RepositoriesPage() {
   useEffect(() => {
     let cancelled = false;
     api
-      .getRepositories(0, 100)
-      .then((page) => {
-        if (!cancelled) setRepositories(page.content);
+      .getAllRepositories()
+      .then((allRepos) => {
+        if (!cancelled) setRepositories(allRepos);
       })
       .catch((error: unknown) => {
         if (!cancelled) setErrorMessage(apiErrorMessage(error));
@@ -87,15 +87,16 @@ export default function RepositoriesPage() {
     setSyncingRepos(true);
     api
       .syncRepositories()
-      .then((page) => {
-        setRepositories(page.content);
+      .then(async (page) => {
+        const allRepos = page.last ? page.content : await api.getAllRepositories();
+        setRepositories(allRepos);
         if (selected) {
-          const updatedSelected = page.content.find((item) => item.id === selected.id) ?? null;
+          const updatedSelected = allRepos.find((item) => item.id === selected.id) ?? null;
           setSelected(updatedSelected);
         }
         toast({
           title: "Repositories synchronized",
-          description: `Loaded ${page.content.length} repositories from GitHub.`,
+          description: `Loaded ${allRepos.length} repositories from GitHub.`,
           variant: "success",
         });
       })
@@ -159,6 +160,7 @@ export default function RepositoriesPage() {
       if (!query) return true;
       return (
         repo.fullName.toLowerCase().includes(query) ||
+        repo.name.toLowerCase().includes(query) ||
         (repo.description ?? "").toLowerCase().includes(query)
       );
     });
