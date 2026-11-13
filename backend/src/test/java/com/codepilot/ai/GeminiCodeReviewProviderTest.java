@@ -111,5 +111,95 @@ class GeminiCodeReviewProviderTest {
                 .hasMessageContaining("SAFETY");
         mockServer.verify();
     }
+
+    @Test
+    void supportsGemini38FlashAndNormalizesModelsPrefixAndTrailingSlash() {
+        ReflectionTestUtils.setField(provider, "apiUrl", "https://gemini.test/");
+        ReflectionTestUtils.setField(provider, "model", "models/gemini-3.8-flash");
+
+        String responseJson = """
+                {"candidates":[{"content":{"parts":[{"text":"[]"}]}}]}
+                """;
+        mockServer.expect(requestTo("https://gemini.test/v1beta/models/gemini-3.8-flash:generateContent"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withSuccess(responseJson, MediaType.APPLICATION_JSON));
+
+        List<ReviewFinding> findings = provider.reviewDiff("diff", List.of(sampleFile));
+
+        mockServer.verify();
+        assertThat(findings).isEmpty();
+        assertThat(provider.getSuccessCount()).isEqualTo(1);
+    }
+
+    @Test
+    void exposesSafeErrorMessageAndModelOn404WithoutLeakingApiKey() {
+        ReflectionTestUtils.setField(provider, "model", "gemini-nonexistent");
+        String errorBody = """
+                {"error":{"code":404,"message":"models/gemini-nonexistent is not found for API version v1beta (key=test-gemini-key)","status":"NOT_FOUND"}}
+                """;
+        mockServer.expect(requestTo("https://gemini.test/v1beta/models/gemini-nonexistent:generateContent"))
+                .andRespond(withStatus(HttpStatus.NOT_FOUND)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(errorBody));
+
+        assertThatThrownBy(() -> provider.reviewDiff("diff", List.of(sampleFile)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("404")
+                .hasMessageContaining("gemini-nonexistent")
+                .hasMessageContaining("NOT_FOUND")
+                .hasMessageNotContaining("test-gemini-key");
+        mockServer.verify();
+        assertThat(provider.getRetryCount()).isZero();
+    }
+
+    @Test
+    void doesNotRetryPermanent403AuthenticationError() {
+        String errorBody = """
+                {"error":{"code":403,"message":"API key not valid.","status":"PERMISSION_DENIED"}}
+                """;
+        mockServer.expect(requestTo("https://gemini.test/v1beta/models/gemini-2.5-flash:generateContent"))
+                .andRespond(withStatus(HttpStatus.FORBIDDEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(errorBody));
+
+        assertThatThrownBy(() -> provider.reviewDiff("diff", List.of(sampleFile)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("403")
+                .hasMessageContaining("PERMISSION_DENIED");
+        mockServer.verify();
+        assertThat(provider.getRetryCount()).isZero();
+    }
+
+    @Test
+    void retriesQuota429ErrorsAndExhaustsAfterMaxAttempts() {
+        String quotaBody = """
+                {"error":{"code":429,"message":"Quota exceeded","status":"RESOURCE_EXHAUSTED"}}
+                """;
+        for (int i = 0; i < 3; i++) {
+            mockServer.expect(requestTo("https://gemini.test/v1beta/models/gemini-2.5-flash:generateContent"))
+                    .andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .body(quotaBody));
+        }
+
+        assertThatThrownBy(() -> provider.reviewDiff("diff", List.of(sampleFile)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("429")
+                .hasMessageContaining("RESOURCE_EXHAUSTED");
+        mockServer.verify();
+        assertThat(provider.getRetryCount()).isEqualTo(2);
+        assertThat(provider.getFailureCount()).isEqualTo(1);
+    }
+
+    @Test
+    void rejectsMalformedOrEmptyGeminiResponses() {
+        mockServer.expect(requestTo("https://gemini.test/v1beta/models/gemini-2.5-flash:generateContent"))
+                .andRespond(withSuccess("not-json", MediaType.APPLICATION_JSON));
+
+        assertThatThrownBy(() -> provider.reviewDiff("diff", List.of(sampleFile)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("malformed");
+        mockServer.verify();
+    }
 }
 

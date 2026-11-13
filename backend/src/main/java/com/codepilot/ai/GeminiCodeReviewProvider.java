@@ -74,7 +74,7 @@ public class GeminiCodeReviewProvider implements CodeReviewProvider {
     @Value("${gemini.api.url}")
     private String apiUrl;
 
-    @Value("${gemini.api.model:gemini-2.5-flash}")
+    @Value("${gemini.api.model:gemini-3.8-flash}")
     private String model;
 
     @Autowired
@@ -140,7 +140,9 @@ public class GeminiCodeReviewProvider implements CodeReviewProvider {
             throw new IllegalStateException("Gemini API key is not configured");
         }
 
-        String endpoint = apiUrl + "/v1beta/models/" + model + ":generateContent";
+        String baseUrl = normalizeBaseUrl(apiUrl);
+        String resolvedModel = normalizeModel(model);
+        String endpoint = baseUrl + "/v1beta/models/" + resolvedModel + ":generateContent";
         Map<String, Object> generationConfig = new LinkedHashMap<>();
         generationConfig.put("responseMimeType", "application/json");
         generationConfig.put("temperature", 0.1);
@@ -174,8 +176,13 @@ public class GeminiCodeReviewProvider implements CodeReviewProvider {
                 if (!retryable || attempt == MAX_ATTEMPTS) {
                     failureCount.incrementAndGet();
                     long latencyMs = (System.nanoTime() - startNanos) / 1_000_000L;
-                    log.warn("gemini_request_failed status={} attempts={} latencyMs={}", status, attempt, latencyMs);
-                    throw new IllegalStateException("Gemini review request failed with status " + status, exception);
+                    String safeError = extractSafeErrorDetail(exception.getResponseBodyAsString());
+                    log.warn("gemini_request_failed status={} model={} attempts={} latencyMs={} reason={}",
+                            status, resolvedModel, attempt, latencyMs, safeError != null ? safeError : "http_error");
+                    String detailSuffix = safeError != null ? ": " + safeError : "";
+                    throw new IllegalStateException(
+                            "Gemini review request failed with status " + status + " for model '" + resolvedModel + "'" + detailSuffix,
+                            exception);
                 }
                 long delayMs = computeRetryDelayMs(attempt, exception.getResponseHeaders());
                 retryCount.incrementAndGet();
@@ -240,6 +247,45 @@ public class GeminiCodeReviewProvider implements CodeReviewProvider {
         long exponential = BASE_RETRY_DELAY_MS * (1L << Math.min(attempt - 1, 4));
         long jitter = ThreadLocalRandom.current().nextLong(0L, 150L);
         return Math.min(MAX_RETRY_WAIT_MS, exponential + jitter);
+    }
+
+    private String normalizeBaseUrl(String rawUrl) {
+        if (rawUrl == null || rawUrl.isBlank()) {
+            return "https://generativelanguage.googleapis.com";
+        }
+        String trimmed = rawUrl.trim();
+        return trimmed.endsWith("/") ? trimmed.substring(0, trimmed.length() - 1) : trimmed;
+    }
+
+    private String normalizeModel(String rawModel) {
+        if (rawModel == null || rawModel.isBlank()) {
+            return "gemini-3.8-flash";
+        }
+        String trimmed = rawModel.trim();
+        return trimmed.startsWith("models/") ? trimmed.substring("models/".length()) : trimmed;
+    }
+
+    private String extractSafeErrorDetail(String responseBody) {
+        if (responseBody == null || responseBody.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(responseBody);
+            JsonNode errorNode = root.path("error");
+            String msg = errorNode.path("message").asText("").trim();
+            String errStatus = errorNode.path("status").asText("").trim();
+            if (msg.isBlank()) {
+                return null;
+            }
+            String combined = errStatus.isBlank() ? msg : errStatus + " - " + msg;
+            if (apiKey != null && !apiKey.isBlank()) {
+                combined = combined.replace(apiKey, "[REDACTED]");
+            }
+            combined = combined.replaceAll("([?&]key=)[^&\\s]+", "$1[REDACTED]");
+            return combined.length() > 240 ? combined.substring(0, 240) : combined;
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private void waitBeforeRetry(long delayMs) {

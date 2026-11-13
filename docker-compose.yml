@@ -80,7 +80,8 @@ services:
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:?GEMINI_API_KEY must be set}
       GEMINI_API_URL: ${GEMINI_API_URL:-https://generativelanguage.googleapis.com}
-      GEMINI_API_MODEL: ${GEMINI_API_MODEL:-gemini-2.5-flash}
+      GEMINI_MODEL: ${GEMINI_MODEL:-${GEMINI_API_MODEL:-gemini-3.8-flash}}
+      GEMINI_API_MODEL: ${GEMINI_API_MODEL:-${GEMINI_MODEL:-gemini-3.8-flash}}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY must be set}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}

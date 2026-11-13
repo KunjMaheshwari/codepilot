@@ -562,7 +562,7 @@ While the repository has a clean architectural skeleton (Spring Boot 3.2.3 API +
 
 ### 9. Testing Assessment & Evidence Matrix
 - **Verified in automated tests**:
-  - Backend: `mvn clean test -B && mvn verify -B` -> **123 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`) using Testcontainers (`postgres:17-alpine`, `redis:7-alpine`).
+  - Backend: `mvn clean test -B && mvn verify -B` -> **128 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`) using Testcontainers (`postgres:17-alpine`, `redis:7-alpine`).
   - Frontend: `npm run lint` (0 errors), `npx tsc --noEmit` (0 errors), `npm run build` (standalone build succeeded), `npx playwright test` (**14 passed in 7.9s** against the rebuilt Docker Compose `frontend` container).
 - **Verified locally (containerized)**:
   - `docker compose --env-file .env.example config -q` valid; `backend` and `frontend` images built cleanly.
@@ -632,6 +632,36 @@ All 8 test scenarios have been thoroughly verified:
   - `ReviewJobWorker` now acknowledges permanent failures without retrying or dead-lettering, schedules bounded exponential backoff + jitter in Redis ZSET for recoverable failures, and marks exhausted retries as `RETRY_EXHAUSTED` before moving payloads to the dead-letter queue and acknowledging.
 - **Frontend Diagnostics (`ReviewJobStatusDto`, `api.ts`, `reviews/page.tsx`)**:
   - Exposed normalized `errorCategory` in `ReviewJobStatusDto` and rendered category-specific failure banners (`Empty pull request diff`, `No supported source files`, `GitHub API failure`, `Gemini API failure`, `Invalid AI response`, `Retry exhaustion`).
+
+---
+
+## 15. Gemini API Model Configuration & Diagnostics Fix
+
+### 15.1 Investigation Findings
+- **Endpoint & Format**: `GeminiCodeReviewProvider` calls `POST {GEMINI_API_URL}/v1beta/models/{model}:generateContent` with `x-goog-api-key` header, `systemInstruction`, `contents`, and `generationConfig` (`responseMimeType: "application/json"`, `temperature: 0.1`, `responseSchema`), matching the official Gemini `v1beta` REST specification.
+- **Model Availability**: Querying `GET /v1beta/models` against the configured project confirmed `models/gemini-3.8-flash` is available and supports `generateContent`, `countTokens`, `createCachedContent`, and `batchGenerateContent`.
+- **Configuration & Diagnostics Gaps**:
+  - `application.yml`, `docker-compose.yml`, and `.env.example` used `GEMINI_API_MODEL` defaulting to `gemini-2.5-flash` instead of `GEMINI_MODEL`.
+  - `GeminiCodeReviewProvider` did not normalize trailing slashes on `apiUrl` or `models/` prefixes on `model`, and HTTP error logs/exceptions omitted the resolved model name and Google's safe `error.message` / `error.status`.
+
+### 15.2 Implemented Fixes
+- **`application.yml` / `docker-compose.yml` / `.env.example` / `.env`**:
+  - Switched default model to `gemini-3.8-flash` configurable via `GEMINI_MODEL` (with fallback to `GEMINI_API_MODEL` for backward compatibility).
+- **`GeminiCodeReviewProvider.java`**:
+  - Normalized `apiUrl` (trailing `/`) and `model` (`models/` prefix).
+  - Extracted Google's safe `error.status` and `error.message` from JSON error payloads (redacting any `apiKey` or `?key=` query values) and included the resolved model identifier in logs and `IllegalStateException` messages without logging keys or prompt contents.
+- **`GeminiCodeReviewProviderTest.java`**:
+  - Added tests for `gemini-3.8-flash` generation with URL/prefix normalization, 404 model-not-found safe diagnostics, 403 authentication errors, 429 quota retries/exhaustion, and malformed JSON responses.
+
+### 15.3 Lightweight Gemini Connectivity Smoke-Test Procedure
+To verify Gemini API connectivity, authentication, and model availability without triggering a code review or consuming generation tokens, run:
+```bash
+set -a && . ./.env && set +a
+curl -fsS -H "x-goog-api-key: $GEMINI_API_KEY" \
+  "${GEMINI_API_URL}/v1beta/models/${GEMINI_MODEL}"
+```
+- **Expected result**: HTTP `200` JSON metadata showing `"name": "models/gemini-3.8-flash"` and `"generateContent"` in `supportedGenerationMethods`.
+- **Verified**: Executed against live `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash` (HTTP `200`, `supportedGenerationMethods` includes `generateContent`), plus a minimal 4-token `generateContent` check (`HTTP 200`, `modelVersion: "gemini-3.8-flash"`).
 
 ### 10. Performance & Disaster Recovery Assessment
 - HikariCP (`max=10`), JVM `-XX:MaxRAMPercentage=75.0`, diff size caps (`100 KB` file / `2 MB` total), and paginated repositories/PRs/reviews bound per-request resource usage.
