@@ -98,19 +98,25 @@ public class ReviewJobWorker {
             } finally {
                 activeJobIds.remove(job.getId());
             }
-            if ("FAILED".equals(job.getStatus()) && job.getAttemptCount() < maxAttempts) {
-                reviewJobService.markRetrying(job, job.getErrorMessage());
-                long delayMs = computeRetryDelayMillis(job.getAttemptCount());
-                long executeAt = System.currentTimeMillis() + delayMs;
-                redisTemplate.opsForZSet().add(retryQueue, payload, executeAt);
-                retryScheduledCount.incrementAndGet();
-                log.warn("Scheduled delayed retry jobId={} correlationId={} attempt={} delayMs={}",
-                        job.getId(), job.getCorrelationId(), job.getAttemptCount(), delayMs);
-            } else if ("FAILED".equals(job.getStatus())) {
-                redisTemplate.opsForList().leftPush(deadLetterQueue, payload);
-                deadLetterCount.incrementAndGet();
-                log.error("Exhausted review job moved to dead-letter queue jobId={} correlationId={} attempt={}",
-                        job.getId(), job.getCorrelationId(), job.getAttemptCount());
+            if ("FAILED".equals(job.getStatus())) {
+                if (reviewJobService.isPermanentFailure(job)) {
+                    log.warn("Permanent review failure jobId={} correlationId={} category={}; not retrying",
+                            job.getId(), job.getCorrelationId(), job.getLastErrorCategory());
+                } else if (job.getAttemptCount() < maxAttempts) {
+                    reviewJobService.markRetrying(job, job.getErrorMessage());
+                    long delayMs = computeRetryDelayMillis(job.getAttemptCount());
+                    long executeAt = System.currentTimeMillis() + delayMs;
+                    redisTemplate.opsForZSet().add(retryQueue, payload, executeAt);
+                    retryScheduledCount.incrementAndGet();
+                    log.warn("Scheduled delayed retry jobId={} correlationId={} attempt={} delayMs={}",
+                            job.getId(), job.getCorrelationId(), job.getAttemptCount(), delayMs);
+                } else {
+                    reviewJobService.markRetryExhausted(job, job.getErrorMessage());
+                    redisTemplate.opsForList().leftPush(deadLetterQueue, payload);
+                    deadLetterCount.incrementAndGet();
+                    log.error("Exhausted review job moved to dead-letter queue jobId={} correlationId={} attempt={}",
+                            job.getId(), job.getCorrelationId(), job.getAttemptCount());
+                }
             } else {
                 processedCount.incrementAndGet();
             }

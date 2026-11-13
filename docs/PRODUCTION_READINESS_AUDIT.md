@@ -562,8 +562,8 @@ While the repository has a clean architectural skeleton (Spring Boot 3.2.3 API +
 
 ### 9. Testing Assessment & Evidence Matrix
 - **Verified in automated tests**:
-  - Backend: `mvn clean test -B` -> **110 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`) using Testcontainers (`postgres:17-alpine`, `redis:7-alpine`).
-  - Frontend: `npm run lint` (0 errors), `npx tsc --noEmit` (0 errors), `npm run build` (standalone build succeeded), `npx playwright test` (**13 passed in 8.7s**).
+  - Backend: `mvn clean test -B && mvn verify -B` -> **123 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`) using Testcontainers (`postgres:17-alpine`, `redis:7-alpine`).
+  - Frontend: `npm run lint` (0 errors), `npx tsc --noEmit` (0 errors), `npm run build` (standalone build succeeded), `npx playwright test` (**14 passed in 7.9s** against the rebuilt Docker Compose `frontend` container).
 - **Verified locally (containerized)**:
   - `docker compose --env-file .env.example config -q` valid; `backend` and `frontend` images built cleanly.
   - Isolated `codepilot-verify` Compose stack (`18080`/`13000`): all 4 containers `healthy`, Flyway `V1`–`V7` applied, `/actuator/health/readiness` (`UP`), `/api/health` (`ok`), CORS + `XSRF-TOKEN`, `X-Forwarded-Proto: https` OAuth `redirect_uri` rewrite, non-root users (`codepilot`, `nextjs`), and PostgreSQL/Redis volume persistence across `down` -> `up` restart.
@@ -608,6 +608,30 @@ All 8 test scenarios have been thoroughly verified:
 6. **Renamed / Archived / Transferred Repositories**: Correctly updates `name`, `fullName`, and `isActive` based on immutable GitHub repository ID.
 7. **Rate Limiting & Transient Network Failure**: Bounded retry with `Retry-After` backoff in `GitHubApiClient`; network failure throws `GitHubApiException` and preserves existing active records in PostgreSQL without marking them inactive.
 8. **Tenant Isolation**: Asserts that records synced by User A are strictly bound to User A and cannot mutate or leak into User B's repositories.
+
+---
+
+## 14. Diff Parsing, Retry State Transitions & Failure Diagnostics Fix
+
+### 14.1 Root Causes Identified from Live Docker Logs
+1. **`Pull request diff has no reviewable source files` (`CodeReviewOrchestrator.java:61`)**:
+   - `DiffParser.parseDiff` treated standard unified-diff `\ No newline at end of file` metadata as `current.setIncomplete(true)`, causing valid `.java` files without a trailing LF (such as `KunjMaheshwari/LeetCode` PR #1, #2, and #4) to be rejected by `isReviewable()`.
+   - Additionally, `DiffParser.parseDiff` did not reset `sawHunk`, `oldLine`, and `newLine` at each `diff --git ` boundary, causing `index ...` headers in subsequent files of multi-file diffs to hit the fallback `incomplete = true` branch.
+2. **`Invalid review job state transition` (`ReviewJobService.java:125`, `ReviewJobWorker.java:102`)**:
+   - `CodeReviewOrchestrator` marked failed jobs as `FAILED` before returning to `ReviewJobWorker`, and `ReviewJobService.isAllowedTransition("FAILED", "RETRYING")` rejected the transition because `FAILED` was treated as unconditionally terminal.
+   - Permanent failures (e.g., `NO_REVIEWABLE_FILES`, `EMPTY_DIFF`, non-retryable 4xx API errors) were not distinguished from transient failures, causing `ReviewJobWorker` to attempt `markRetrying(...)`, throw `IllegalStateException`, and leave payloads unacknowledged in Redis `codepilot:review-jobs:processing`.
+
+### 14.2 Implemented Fixes
+- **`DiffParser`**:
+  - Ignores `\ No newline at end of file` metadata without setting `incomplete = true`.
+  - Resets `sawHunk = false`, `oldLine = 0`, and `newLine = 0` on every `diff --git ` header.
+  - Expanded non-reviewable asset/doc/lock exclusions (`.md`, `.txt`, `.gif`, `.svg`, `.ico`, `.webp`, `.pdf`, `.zip`, `.tar`, `.gz`, `.min.js`, `.min.css`, `.map`, `yarn.lock`, `pnpm-lock.yaml`, etc.).
+- **`CodeReviewOrchestrator` & `ReviewJobService` & `ReviewJobWorker`**:
+  - Classified exceptions into explicit categories: `EMPTY_DIFF`, `NO_REVIEWABLE_FILES`, `DIFF_TOO_LARGE`, `GITHUB_API_ERROR` / `GITHUB_API_TRANSIENT`, `GEMINI_API_ERROR` / `GEMINI_API_TRANSIENT`, `INVALID_AI_RESPONSE`, `RETRY_EXHAUSTED`, and `PROCESSING`.
+  - Allowed idempotent `FAILED` / `PROCESSING` -> `RETRYING` transitions in `ReviewJobService.markRetrying` exclusively for recoverable failures, while blocking retries on permanent failures (`isPermanentFailure`).
+  - `ReviewJobWorker` now acknowledges permanent failures without retrying or dead-lettering, schedules bounded exponential backoff + jitter in Redis ZSET for recoverable failures, and marks exhausted retries as `RETRY_EXHAUSTED` before moving payloads to the dead-letter queue and acknowledging.
+- **Frontend Diagnostics (`ReviewJobStatusDto`, `api.ts`, `reviews/page.tsx`)**:
+  - Exposed normalized `errorCategory` in `ReviewJobStatusDto` and rendered category-specific failure banners (`Empty pull request diff`, `No supported source files`, `GitHub API failure`, `Gemini API failure`, `Invalid AI response`, `Retry exhaustion`).
 
 ### 10. Performance & Disaster Recovery Assessment
 - HikariCP (`max=10`), JVM `-XX:MaxRAMPercentage=75.0`, diff size caps (`100 KB` file / `2 MB` total), and paginated repositories/PRs/reviews bound per-request resource usage.

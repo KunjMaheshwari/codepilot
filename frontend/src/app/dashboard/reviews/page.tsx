@@ -36,6 +36,42 @@ const severityOrder = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"] as const;
 
 type ReviewFilter = "all" | "active" | "completed" | "failed";
 
+function failureCategoryLabel(category?: string): string | null {
+  switch (category) {
+    case "EMPTY_DIFF":
+      return "Empty pull request diff";
+    case "NO_REVIEWABLE_FILES":
+      return "No supported source files";
+    case "DIFF_TOO_LARGE":
+      return "Diff exceeds size limit";
+    case "GITHUB_API_ERROR":
+      return "GitHub API failure";
+    case "GEMINI_API_ERROR":
+      return "Gemini API failure";
+    case "INVALID_AI_RESPONSE":
+      return "Invalid AI response";
+    case "RETRY_EXHAUSTED":
+      return "Retry exhaustion";
+    default:
+      return null;
+  }
+}
+
+function formatFailureBanner(job?: { errorCategory?: string; errorMessage?: string }): string {
+  const label = failureCategoryLabel(job?.errorCategory);
+  const detail = job?.errorMessage?.trim();
+  if (label && detail) {
+    return `${label}: ${detail}`;
+  }
+  if (label) {
+    return label;
+  }
+  if (detail) {
+    return detail;
+  }
+  return "This review job failed before findings could be finalized.";
+}
+
 export default function ReviewsPage() {
   const [reviews, setReviews] = useState<Review[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -463,7 +499,7 @@ export default function ReviewsPage() {
                     </span>
                   </div>
                 ) : selectedStatus === "FAILED" ? (
-                  <ErrorBanner message="This review job failed before findings could be finalized." />
+                  <ErrorBanner message={formatFailureBanner(jobs[selectedReview.id])} />
                 ) : loadingFindingsId === selectedReview.id && !findingsByReview[selectedReview.id] ? (
                   <div className="space-y-3">
                     <Skeleton className="h-24 w-full" />

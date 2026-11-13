@@ -35,6 +35,9 @@ public class DiffParser {
                 current = finish(current, files);
                 current = new ParsedFile();
                 current.setDiffContent(new StringBuilder());
+                newLine = 0;
+                oldLine = 0;
+                sawHunk = false;
                 String[] paths = line.substring("diff --git ".length()).split(" ");
                 if (paths.length >= 2) {
                     current.setOldFilePath(stripPrefix(paths[0], "a/"));
@@ -95,7 +98,7 @@ public class DiffParser {
                 continue;
             }
             if (line.startsWith("\\ No newline")) {
-                current.setIncomplete(true);
+                // Standard unified diff metadata indicating no trailing newline; not a truncated diff.
                 continue;
             }
             if (!sawHunk || line.isEmpty()) {
@@ -143,9 +146,32 @@ public class DiffParser {
                 && !path.endsWith(".png")
                 && !path.endsWith(".jpg")
                 && !path.endsWith(".jpeg")
+                && !path.endsWith(".gif")
+                && !path.endsWith(".svg")
+                && !path.endsWith(".ico")
+                && !path.endsWith(".webp")
+                && !path.endsWith(".pdf")
+                && !path.endsWith(".zip")
+                && !path.endsWith(".tar")
+                && !path.endsWith(".gz")
                 && !path.endsWith(".jar")
                 && !path.endsWith(".class")
-                && !path.contains("package-lock.json");
+                && !path.endsWith(".exe")
+                && !path.endsWith(".dll")
+                && !path.endsWith(".so")
+                && !path.endsWith(".dylib")
+                && !path.endsWith(".woff")
+                && !path.endsWith(".woff2")
+                && !path.endsWith(".ttf")
+                && !path.endsWith(".eot")
+                && !path.endsWith(".min.js")
+                && !path.endsWith(".min.css")
+                && !path.endsWith(".map")
+                && !path.endsWith(".md")
+                && !path.endsWith(".txt")
+                && !path.contains("package-lock.json")
+                && !path.endsWith("yarn.lock")
+                && !path.endsWith("pnpm-lock.yaml");
     }
 
     private String stripPrefix(String path, String prefix) {

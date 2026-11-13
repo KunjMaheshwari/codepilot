@@ -165,4 +165,39 @@ class ReviewJobWorkerTest {
 
         verify(listOperations).leftPush("queue", "msg-1");
     }
+
+    @Test
+    void permanentFailureAcknowledgesWithoutRetryingOrDeadLettering() {
+        UUID jobId = UUID.fromString("00000000-0000-0000-0000-000000000001");
+        UUID reviewId = UUID.fromString("00000000-0000-0000-0000-000000000002");
+        String payload = """
+                {"jobId":"00000000-0000-0000-0000-000000000001",
+                 "reviewId":"00000000-0000-0000-0000-000000000002",
+                 "pullRequestId":"00000000-0000-0000-0000-000000000003",
+                 "repositoryId":"00000000-0000-0000-0000-000000000004",
+                 "createdAt":null,
+                 "correlationId":"c"}
+                """;
+        Review review = new Review();
+        review.setId(reviewId);
+        ReviewJob job = new ReviewJob();
+        job.setId(jobId);
+        job.setReview(review);
+        job.setStatus("FAILED");
+        job.setAttemptCount(1);
+        job.setLastErrorCategory("NO_REVIEWABLE_FILES");
+        job.setErrorMessage("Pull request diff has no supported source files");
+
+        when(listOperations.rightPopAndLeftPush("queue", "processing")).thenReturn(payload);
+        when(reviewJobService.claim(jobId)).thenReturn(true);
+        when(jobRepository.find(jobId)).thenReturn(job);
+        when(reviewJobService.isPermanentFailure(job)).thenReturn(true);
+
+        worker.poll();
+
+        verify(reviewJobService, never()).markRetrying(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        verify(zSetOperations, never()).add(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(), anyDouble());
+        verify(listOperations, never()).leftPush(eq("dead-letter"), org.mockito.ArgumentMatchers.anyString());
+        verify(listOperations).remove("processing", 1, payload);
+    }
 }

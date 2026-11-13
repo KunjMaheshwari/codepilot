@@ -88,6 +88,7 @@ export interface ReviewJob {
   startedAt?: string;
   completedAt?: string;
   errorMessage?: string;
+  errorCategory?: string;
 }
 
 export interface DashboardStats {

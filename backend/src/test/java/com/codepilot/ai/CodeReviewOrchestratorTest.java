@@ -123,4 +123,33 @@ class CodeReviewOrchestratorTest {
         verify(reviewJobService).markFailed(eq(job), anyString());
         verify(reviewRepository).save(review);
     }
+
+    @Test
+    void executeReview_ClassifiesNoReviewableFilesAsPermanentCategory() {
+        when(reviewJobService.createJob(review)).thenReturn(job);
+        when(gitHubIntegrationService.getPullRequestDiff(user, repo, 1)).thenReturn("diff");
+
+        DiffParser.ParsedFile nonReviewable = new DiffParser.ParsedFile();
+        nonReviewable.setFilePath("README.md");
+        nonReviewable.setReviewable(false);
+        when(diffParser.parseDiff("diff")).thenReturn(List.of(nonReviewable));
+
+        orchestrator.executeReview(review, pr, repo, user);
+
+        verify(reviewJobService).markFailed(eq(job), eq("Pull request diff has no supported source files"));
+        org.assertj.core.api.Assertions.assertThat(job.getLastErrorCategory()).isEqualTo("NO_REVIEWABLE_FILES");
+    }
+
+    @Test
+    void executeReview_ClassifiesGitHubApiErrorsByRetryability() {
+        when(reviewJobService.createJob(review)).thenReturn(job);
+        when(gitHubIntegrationService.getPullRequestDiff(user, repo, 1))
+                .thenThrow(new com.codepilot.exception.GitHubApiException(
+                        "GitHub repository not found", org.springframework.http.HttpStatus.NOT_FOUND));
+
+        orchestrator.executeReview(review, pr, repo, user);
+
+        verify(reviewJobService).markFailed(eq(job), eq("GitHub repository not found"));
+        org.assertj.core.api.Assertions.assertThat(job.getLastErrorCategory()).isEqualTo("GITHUB_API_ERROR");
+    }
 }

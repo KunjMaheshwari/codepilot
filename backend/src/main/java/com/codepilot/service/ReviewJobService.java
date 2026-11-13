@@ -57,10 +57,42 @@ public class ReviewJobService {
         }
         job.setStatus("FAILED");
         job.setErrorMessage(safeReason(reason));
-        job.setLastErrorCategory("PROCESSING");
+        if (job.getLastErrorCategory() == null || job.getLastErrorCategory().isBlank()) {
+            job.setLastErrorCategory("PROCESSING");
+        }
         job.setCompletedAt(ZonedDateTime.now());
         job.setProcessingHeartbeatAt(null);
         reviewJobRepository.save(job);
+    }
+
+    @Transactional
+    public void markRetryExhausted(ReviewJob job, String reason) {
+        if (isTerminal(job.getStatus()) && !"FAILED".equals(job.getStatus())) {
+            throw new IllegalStateException("Cannot mark terminal review job as RETRY_EXHAUSTED");
+        }
+        job.setStatus("FAILED");
+        job.setLastErrorCategory("RETRY_EXHAUSTED");
+        String prefix = "Retries exhausted";
+        String safe = safeReason(reason);
+        job.setErrorMessage(safe.startsWith(prefix) ? safe : safeReason(prefix + ": " + safe));
+        job.setCompletedAt(ZonedDateTime.now());
+        job.setProcessingHeartbeatAt(null);
+        reviewJobRepository.save(job);
+    }
+
+    public boolean isPermanentFailure(ReviewJob job) {
+        if (job == null || job.getLastErrorCategory() == null) {
+            return false;
+        }
+        return switch (job.getLastErrorCategory()) {
+            case "EMPTY_DIFF",
+                 "NO_REVIEWABLE_FILES",
+                 "DIFF_TOO_LARGE",
+                 "GITHUB_API_ERROR",
+                 "GEMINI_API_ERROR",
+                 "RETRY_EXHAUSTED" -> true;
+            default -> false;
+        };
     }
 
     @Transactional
@@ -121,12 +153,21 @@ public class ReviewJobService {
 
     @Transactional
     public void markRetrying(ReviewJob job, String reason) {
-        if (!isAllowedTransition(job.getStatus(), "RETRYING")) {
+        if ("RETRYING".equals(job.getStatus())) {
+            return;
+        }
+        if (!"PROCESSING".equals(job.getStatus()) && !"FAILED".equals(job.getStatus())) {
             throw new IllegalStateException("Invalid review job state transition");
+        }
+        if (isPermanentFailure(job)) {
+            throw new IllegalStateException("Cannot retry permanent review job failure");
         }
         job.setStatus("RETRYING");
         job.setErrorMessage(safeReason(reason));
-        job.setLastErrorCategory("RETRYABLE");
+        if (job.getLastErrorCategory() == null || job.getLastErrorCategory().isBlank()) {
+            job.setLastErrorCategory("RETRYABLE");
+        }
+        job.setCompletedAt(null);
         job.setProcessingHeartbeatAt(null);
         reviewJobRepository.save(job);
     }
