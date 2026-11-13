@@ -24,8 +24,9 @@ import java.time.ZonedDateTime;
 @RequiredArgsConstructor
 public class GitHubIntegrationService {
 
-    private static final int MAX_SYNC_PAGES = 10;
     private static final int DEFAULT_SYNC_PAGE_SIZE = 100;
+    private static final int MAX_SYNC_PAGES = 1000;
+    private static final int SAFETY_MAX_PAGES = 1000;
 
     private final GitHubApiClient gitHubApiClient;
     private final ConnectedGitHubAccountRepository connectedGitHubAccountRepository;
@@ -78,10 +79,11 @@ public class GitHubIntegrationService {
     }
 
     /**
-     * Paginates through the user's GitHub repositories and upserts each by
-     * immutable
-     * GitHub repository ID. Only when full pagination completes does it deactivate
-     * previously active repositories that are no longer returned by GitHub.
+     * Paginates through all of the user's GitHub repositories and upserts each by
+     * immutable GitHub repository ID. Follows GitHub Link rel="next" headers if present,
+     * or increments page numbers until no repositories remain.
+     * Only when full pagination completes does it deactivate previously active
+     * repositories that are no longer returned by GitHub.
      */
     @Transactional
     public List<Repository> synchronizeAllRepositories(User user) {
@@ -92,16 +94,53 @@ public class GitHubIntegrationService {
         boolean completedFullScan = false;
         ZonedDateTime syncedAt = ZonedDateTime.now();
 
-        for (int page = 1; page <= MAX_SYNC_PAGES; page++) {
-            List<Map<String, Object>> pageItems = gitHubApiClient.getUserRepositories(
-                    token, page, DEFAULT_SYNC_PAGE_SIZE);
-            for (Map<String, Object> remote : pageItems) {
-                Repository repository = upsertRepository(user, remote);
-                repository.setLastSyncedAt(syncedAt);
-                synced.add(repository);
-                seenGithubRepoIds.add(repository.getGithubRepoId());
+        String nextUrl = null;
+        int currentPage = 1;
+
+        while (currentPage <= SAFETY_MAX_PAGES) {
+            List<Map<String, Object>> pageItems;
+            String foundNextUrl = null;
+
+            if (nextUrl != null) {
+                GitHubApiClient.GitHubPagedResponse<Map<String, Object>> paged =
+                        gitHubApiClient.getUserRepositoriesPageByUrl(token, nextUrl);
+                pageItems = paged != null ? paged.items() : List.of();
+                foundNextUrl = paged != null ? paged.nextUrl() : null;
+            } else {
+                GitHubApiClient.GitHubPagedResponse<Map<String, Object>> paged =
+                        gitHubApiClient.getUserRepositoriesPage(token, currentPage, DEFAULT_SYNC_PAGE_SIZE);
+                if (paged != null) {
+                    pageItems = paged.items();
+                    foundNextUrl = paged.nextUrl();
+                } else {
+                    // Fallback to getUserRepositories when mock or subclass returns null for paged
+                    pageItems = gitHubApiClient.getUserRepositories(token, currentPage, DEFAULT_SYNC_PAGE_SIZE);
+                }
             }
-            if (pageItems.size() < DEFAULT_SYNC_PAGE_SIZE) {
+
+            if (pageItems == null || pageItems.isEmpty()) {
+                completedFullScan = true;
+                break;
+            }
+
+            for (Map<String, Object> remote : pageItems) {
+                String githubId = extractGithubRepoId(remote);
+                if (seenGithubRepoIds.add(githubId)) {
+                    Repository repository = upsertRepository(user, remote);
+                    repository.setLastSyncedAt(syncedAt);
+                    synced.add(repository);
+                } else {
+                    log.debug("Skipping duplicate repository with GitHub ID {} on page {}", githubId, currentPage);
+                }
+            }
+
+            if (foundNextUrl != null && !foundNextUrl.isBlank()) {
+                nextUrl = foundNextUrl;
+                currentPage++;
+            } else if (pageItems.size() == DEFAULT_SYNC_PAGE_SIZE && nextUrl == null) {
+                // If no Link header was provided by the upstream response or mock, fallback to incrementing page number
+                currentPage++;
+            } else {
                 completedFullScan = true;
                 break;
             }
@@ -117,6 +156,11 @@ public class GitHubIntegrationService {
             }
         }
         return synced;
+    }
+
+    private String extractGithubRepoId(Map<String, Object> remote) {
+        Object rawId = remote.get("id");
+        return rawId instanceof Number number ? String.valueOf(number.longValue()) : String.valueOf(rawId);
     }
 
     public List<Map<String, Object>> getPullRequests(User user, Repository repository, int page, int perPage) {

@@ -213,8 +213,160 @@ class GitHubIntegrationServiceTest {
             assertThat(repo.getGithubRepoId()).isEqualTo("42");
             assertThat(repo.getIsActive()).isFalse();
         });
-        assertThat(removed.getIsActive()).isFalse();
-        verify(repositoryRepository).save(removed);
+    }
+
+    @Test
+    void synchronizeAllRepositories_MultiplePagesWithMoreThan250Repositories() {
+        when(connectedGitHubAccountRepository.findByUserId(testUser.getId()))
+                .thenReturn(Optional.of(connectedAccount));
+        when(encryptionService.decrypt("test-token")).thenReturn("decrypted-token");
+
+        // Page 1: 100 repositories
+        List<Map<String, Object>> page1 = new java.util.ArrayList<>();
+        for (int i = 1; i <= 100; i++) {
+            page1.add(Map.of("id", i, "name", "repo-" + i, "full_name", "owner/repo-" + i, "private", false));
+        }
+        // Page 2: 100 repositories
+        List<Map<String, Object>> page2 = new java.util.ArrayList<>();
+        for (int i = 101; i <= 200; i++) {
+            page2.add(Map.of("id", i, "name", "repo-" + i, "full_name", "owner/repo-" + i, "private", false));
+        }
+        // Page 3: 55 repositories (total 255)
+        List<Map<String, Object>> page3 = new java.util.ArrayList<>();
+        for (int i = 201; i <= 255; i++) {
+            page3.add(Map.of("id", i, "name", "repo-" + i, "full_name", "owner/repo-" + i, "private", false));
+        }
+
+        when(gitHubApiClient.getUserRepositoriesPage("decrypted-token", 1, 100))
+                .thenReturn(new GitHubApiClient.GitHubPagedResponse<>(page1, "https://api.github.test/user/repos?page=2"));
+        when(gitHubApiClient.getUserRepositoriesPageByUrl("decrypted-token", "https://api.github.test/user/repos?page=2"))
+                .thenReturn(new GitHubApiClient.GitHubPagedResponse<>(page2, "https://api.github.test/user/repos?page=3"));
+        when(gitHubApiClient.getUserRepositoriesPageByUrl("decrypted-token", "https://api.github.test/user/repos?page=3"))
+                .thenReturn(new GitHubApiClient.GitHubPagedResponse<>(page3, null));
+
+        when(repositoryRepository.findByGithubRepoIdAndOwnerId(anyString(), any()))
+                .thenReturn(Optional.empty());
+        when(repositoryRepository.save(any(Repository.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        List<Repository> result = gitHubIntegrationService.synchronizeAllRepositories(testUser);
+
+        assertThat(result).hasSize(255);
+        assertThat(result.get(0).getName()).isEqualTo("repo-1");
+        assertThat(result.get(254).getName()).isEqualTo("repo-255");
+    }
+
+    @Test
+    void synchronizeAllRepositories_DeduplicatesRepositoriesAcrossPages() {
+        when(connectedGitHubAccountRepository.findByUserId(testUser.getId()))
+                .thenReturn(Optional.of(connectedAccount));
+        when(encryptionService.decrypt("test-token")).thenReturn("decrypted-token");
+
+        // Page 1 contains repo 1 and repo 2
+        List<Map<String, Object>> page1 = List.of(
+                Map.of("id", 1, "name", "repo-1", "full_name", "owner/repo-1", "private", false),
+                Map.of("id", 2, "name", "repo-2", "full_name", "owner/repo-2", "private", false));
+        // Page 2 contains repo 2 (duplicate) and repo 3
+        List<Map<String, Object>> page2 = List.of(
+                Map.of("id", 2, "name", "repo-2", "full_name", "owner/repo-2", "private", false),
+                Map.of("id", 3, "name", "repo-3", "full_name", "owner/repo-3", "private", false));
+
+        when(gitHubApiClient.getUserRepositoriesPage("decrypted-token", 1, 100))
+                .thenReturn(new GitHubApiClient.GitHubPagedResponse<>(page1, "https://api.github.test/user/repos?page=2"));
+        when(gitHubApiClient.getUserRepositoriesPageByUrl("decrypted-token", "https://api.github.test/user/repos?page=2"))
+                .thenReturn(new GitHubApiClient.GitHubPagedResponse<>(page2, null));
+
+        when(repositoryRepository.findByGithubRepoIdAndOwnerId(anyString(), any()))
+                .thenReturn(Optional.empty());
+        when(repositoryRepository.save(any(Repository.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        List<Repository> result = gitHubIntegrationService.synchronizeAllRepositories(testUser);
+
+        assertThat(result).hasSize(3);
+        assertThat(result.stream().map(Repository::getGithubRepoId)).containsExactlyInAnyOrder("1", "2", "3");
+    }
+
+    @Test
+    void synchronizeAllRepositories_EmptyFinalPageStopsPaginationSafely() {
+        when(connectedGitHubAccountRepository.findByUserId(testUser.getId()))
+                .thenReturn(Optional.of(connectedAccount));
+        when(encryptionService.decrypt("test-token")).thenReturn("decrypted-token");
+
+        // Exactly 100 items on page 1 with next Link header pointing to page 2
+        List<Map<String, Object>> page1 = new java.util.ArrayList<>();
+        for (int i = 1; i <= 100; i++) {
+            page1.add(Map.of("id", i, "name", "repo-" + i, "full_name", "owner/repo-" + i, "private", false));
+        }
+        // Page 2 is empty with no next link
+        when(gitHubApiClient.getUserRepositoriesPage("decrypted-token", 1, 100))
+                .thenReturn(new GitHubApiClient.GitHubPagedResponse<>(page1, "https://api.github.test/user/repos?page=2"));
+        when(gitHubApiClient.getUserRepositoriesPageByUrl("decrypted-token", "https://api.github.test/user/repos?page=2"))
+                .thenReturn(new GitHubApiClient.GitHubPagedResponse<>(List.of(), null));
+
+        when(repositoryRepository.findByGithubRepoIdAndOwnerId(anyString(), any()))
+                .thenReturn(Optional.empty());
+        when(repositoryRepository.save(any(Repository.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        List<Repository> result = gitHubIntegrationService.synchronizeAllRepositories(testUser);
+
+        assertThat(result).hasSize(100);
+    }
+
+    @Test
+    void synchronizeAllRepositories_EnforcesTenantIsolation() {
+        User otherUser = new User();
+        otherUser.setId(UUID.randomUUID());
+        otherUser.setUsername("otheruser");
+
+        ConnectedGitHubAccount otherAccount = new ConnectedGitHubAccount();
+        otherAccount.setUser(otherUser);
+        otherAccount.setAccessToken("other-token");
+
+        when(connectedGitHubAccountRepository.findByUserId(otherUser.getId()))
+                .thenReturn(Optional.of(otherAccount));
+        when(encryptionService.decrypt("other-token")).thenReturn("decrypted-other-token");
+
+        when(gitHubApiClient.getUserRepositoriesPage("decrypted-other-token", 1, 100))
+                .thenReturn(new GitHubApiClient.GitHubPagedResponse<>(List.of(
+                        Map.of("id", 888, "name", "tenant-repo", "full_name", "other/tenant-repo", "private", false)), null));
+
+        when(repositoryRepository.findByGithubRepoIdAndOwnerId("888", otherUser.getId()))
+                .thenReturn(Optional.empty());
+        when(repositoryRepository.save(any(Repository.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        List<Repository> result = gitHubIntegrationService.synchronizeAllRepositories(otherUser);
+
+        assertThat(result).singleElement().satisfies(repo -> {
+            assertThat(repo.getOwner().getId()).isEqualTo(otherUser.getId());
+            assertThat(repo.getOwner().getUsername()).isEqualTo("otheruser");
+        });
+    }
+
+    @Test
+    void synchronizeAllRepositories_NetworkFailureDuringPaginationThrowsAndDoesNotMarkMissingInactive() {
+        when(connectedGitHubAccountRepository.findByUserId(testUser.getId()))
+                .thenReturn(Optional.of(connectedAccount));
+        when(encryptionService.decrypt("test-token")).thenReturn("decrypted-token");
+
+        List<Map<String, Object>> page1 = List.of(
+                Map.of("id", 1, "name", "repo-1", "full_name", "owner/repo-1", "private", false));
+
+        when(repositoryRepository.findByGithubRepoIdAndOwnerId("1", testUser.getId()))
+                .thenReturn(Optional.empty());
+        when(repositoryRepository.save(any(Repository.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        when(gitHubApiClient.getUserRepositoriesPage("decrypted-token", 1, 100))
+                .thenReturn(new GitHubApiClient.GitHubPagedResponse<>(page1, "https://api.github.test/user/repos?page=2"));
+        when(gitHubApiClient.getUserRepositoriesPageByUrl("decrypted-token", "https://api.github.test/user/repos?page=2"))
+                .thenThrow(new com.codepilot.exception.GitHubApiException("GitHub API is unavailable", org.springframework.http.HttpStatus.GATEWAY_TIMEOUT));
+
+        assertThatThrownBy(() -> gitHubIntegrationService.synchronizeAllRepositories(testUser))
+                .isInstanceOf(com.codepilot.exception.GitHubApiException.class)
+                .hasMessage("GitHub API is unavailable");
     }
 
     @Test

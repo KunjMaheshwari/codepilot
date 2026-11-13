@@ -184,4 +184,32 @@ class GitHubApiClientTest {
 
         server.verify();
     }
+
+    @Test
+    void extractsNextUrlFromLinkHeaderCorrectly() {
+        String linkHeader = "<https://api.github.test/user/repos?page=2&per_page=100>; rel=\"next\", "
+                + "<https://api.github.test/user/repos?page=5&per_page=100>; rel=\"last\"";
+        assertThat(client.extractNextUrl(linkHeader))
+                .isEqualTo("https://api.github.test/user/repos?page=2&per_page=100");
+
+        assertThat(client.extractNextUrl(null)).isNull();
+        assertThat(client.extractNextUrl("")).isNull();
+        assertThat(client.extractNextUrl("<https://api.github.test/user/repos?page=1>; rel=\"prev\"")).isNull();
+    }
+
+    @Test
+    void parsesNextPageUrlFromLinkHeaderInPagedResponse() {
+        server.expect(requestTo("https://api.github.test/user/repos?page=1&per_page=100"))
+                .andExpect(method(GET))
+                .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators
+                        .withSuccess("[{\"id\":101,\"name\":\"repo-101\"}]", org.springframework.http.MediaType.APPLICATION_JSON)
+                        .header("Link", "<https://api.github.test/user/repos?page=2&per_page=100>; rel=\"next\""));
+
+        GitHubApiClient.GitHubPagedResponse<java.util.Map<String, Object>> response =
+                client.getUserRepositoriesPage("secret-token", 1, 100);
+
+        assertThat(response.items()).hasSize(1);
+        assertThat(response.nextUrl()).isEqualTo("https://api.github.test/user/repos?page=2&per_page=100");
+        server.verify();
+    }
 }

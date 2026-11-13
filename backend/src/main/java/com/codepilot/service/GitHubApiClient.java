@@ -63,6 +63,15 @@ public class GitHubApiClient {
         return executeWithRetry(() -> exchangeList(url, accessToken));
     }
 
+    public GitHubPagedResponse<Map<String, Object>> getUserRepositoriesPage(String accessToken, int page, int perPage) {
+        String url = String.format("%s/user/repos?page=%d&per_page=%d", githubApiUrl, page, perPage);
+        return getUserRepositoriesPageByUrl(accessToken, url);
+    }
+
+    public GitHubPagedResponse<Map<String, Object>> getUserRepositoriesPageByUrl(String accessToken, String url) {
+        return executeWithRetry(() -> exchangePagedList(url, accessToken));
+    }
+
     public Map<String, Object> getPullRequest(String accessToken, String owner, String repo, int prNumber) {
         String url = String.format("%s/repos/%s/%s/pulls/%d", githubApiUrl, owner, repo, prNumber);
         return executeWithRetry(() -> {
@@ -174,11 +183,43 @@ public class GitHubApiClient {
         throw new GitHubApiException("GitHub API comment request failed", HttpStatus.BAD_GATEWAY);
     }
 
+    public record GitHubPagedResponse<T>(List<T> items, String nextUrl) {}
+
     private List<Map<String, Object>> exchangeList(String url, String accessToken) {
+        return exchangePagedList(url, accessToken).items();
+    }
+
+    private GitHubPagedResponse<Map<String, Object>> exchangePagedList(String url, String accessToken) {
         ResponseEntity<List<Map<String, Object>>> response = restTemplate.exchange(
                 URI.create(url), HttpMethod.GET, new HttpEntity<>(createHeaders(accessToken)),
                 new ParameterizedTypeReference<List<Map<String, Object>>>() {});
-        return response.getBody() == null ? List.of() : response.getBody();
+        List<Map<String, Object>> items = response.getBody() == null ? List.of() : response.getBody();
+        String nextUrl = extractNextUrl(response.getHeaders().getFirst(HttpHeaders.LINK));
+        return new GitHubPagedResponse<>(items, nextUrl);
+    }
+
+    String extractNextUrl(String linkHeader) {
+        if (linkHeader == null || linkHeader.isBlank()) {
+            return null;
+        }
+        for (String element : linkHeader.split(",")) {
+            String[] segments = element.split(";");
+            if (segments.length >= 2) {
+                String linkPart = segments[0].trim();
+                boolean isNext = false;
+                for (int i = 1; i < segments.length; i++) {
+                    String param = segments[i].trim();
+                    if (param.equalsIgnoreCase("rel=\"next\"") || param.equalsIgnoreCase("rel='next'")) {
+                        isNext = true;
+                        break;
+                    }
+                }
+                if (isNext && linkPart.startsWith("<") && linkPart.endsWith(">")) {
+                    return linkPart.substring(1, linkPart.length() - 1).trim();
+                }
+            }
+        }
+        return null;
     }
 
     private <T> T executeWithRetry(Supplier<T> action) {

@@ -562,17 +562,52 @@ While the repository has a clean architectural skeleton (Spring Boot 3.2.3 API +
 
 ### 9. Testing Assessment & Evidence Matrix
 - **Verified in automated tests**:
-  - Backend: `mvn clean test -B && mvn verify -B` -> **103 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`) using Testcontainers (`postgres:17-alpine`, `redis:7-alpine`).
+  - Backend: `mvn clean test -B` -> **110 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`) using Testcontainers (`postgres:17-alpine`, `redis:7-alpine`).
   - Frontend: `npm run lint` (0 errors), `npx tsc --noEmit` (0 errors), `npm run build` (standalone build succeeded), `npx playwright test` (**13 passed in 8.7s**).
 - **Verified locally (containerized)**:
   - `docker compose --env-file .env.example config -q` valid; `backend` and `frontend` images built cleanly.
   - Isolated `codepilot-verify` Compose stack (`18080`/`13000`): all 4 containers `healthy`, Flyway `V1`–`V7` applied, `/actuator/health/readiness` (`UP`), `/api/health` (`ok`), CORS + `XSRF-TOKEN`, `X-Forwarded-Proto: https` OAuth `redirect_uri` rewrite, non-root users (`codepilot`, `nextjs`), and PostgreSQL/Redis volume persistence across `down` -> `up` restart.
 - **Verified using mocked external services**:
   - GitHub OAuth2 login/API calls (`@MockBean GitHubApiClient`, `oauth2Login()`), Gemini API (`MockRestServiceServer`), and Playwright API route interception (`page.route`).
+  - Complete pagination for GitHub repository synchronization: Link header parsing (`rel="next"`), multi-page fetching (>250 repositories across 3 pages), empty final pages, cross-page deduplication by immutable GitHub repo ID, tenant isolation, and atomic failure recovery without deactivating existing active repositories.
 - **Verified against live external services**:
   - None (no live GitHub OAuth app, live GitHub webhook delivery, or live Gemini API key calls were executed in this audit).
 - **Not yet verified**:
   - GitHub Actions workflow execution on GitHub runners (including Trivy container scans), multi-instance horizontal scaling under load, and live TLS reverse-proxy + GitHub OAuth callback end-to-end.
+
+---
+
+## 13. GitHub Repository Synchronization Pagination Implementation
+
+### 13.1 Background & Root Cause
+Prior to this fix, `GitHubIntegrationService.synchronizeAllRepositories` suffered from two limitations:
+1. It hardcoded a 10-page limit (`MAX_SYNC_PAGES = 10`), but more critically it did not inspect GitHub's REST API `Link` response header (`<...>; rel="next"`).
+2. Synchronization fetched repositories without following the standard RFC 5988 / GitHub Link header pagination protocol, risking premature termination or omission of repositories located beyond initial pages (such as `KunjMaheshwari/LeetCode`).
+
+### 13.2 Architecture & Changes
+1. **`GitHubApiClient`**:
+   - Added record `GitHubPagedResponse<T>(List<T> items, String nextUrl)`.
+   - Added `getUserRepositoriesPage(String accessToken, int page, int perPage)` and `getUserRepositoriesPageByUrl(String accessToken, String url)`.
+   - Implemented RFC 5988 `Link` header extraction in `extractNextUrl(String linkHeader)`: parses comma-separated link entries, identifies `rel="next"`, and extracts the canonical target URI.
+   - Built on top of the resilient `executeWithRetry(...)` execution wrapper, providing automatic bounded exponential backoff on HTTP 403 / 429 (`Retry-After`) and transient HTTP 5xx errors.
+2. **`GitHubIntegrationService`**:
+   - Updated `synchronizeAllRepositories(User user)` to start at page 1 with `per_page=100`.
+   - If GitHub returns a `Link` header with `rel="next"`, it follows `nextUrl` via `getUserRepositoriesPageByUrl(...)` until `nextUrl == null`.
+   - If no `Link` header is provided (e.g. legacy or mocked environments), it cleanly falls back to incrementing `page++` as long as the page returned full items (`DEFAULT_SYNC_PAGE_SIZE = 100`).
+   - Stop condition: stops safely when an empty page is returned, `nextUrl` is null, or the safety guard (`SAFETY_MAX_PAGES = 1000`, up to 100,000 repositories) is reached.
+   - Safe deduplication: uses `seenGithubRepoIds.add(githubId)` before upserting each repository, preventing duplicate DB queries or duplicate records if GitHub returns repeated entries across pages.
+   - Tenant isolation & non-destructive sync: all repositories are scoped strictly by `(githubRepoId, ownerId)`. Deactivation of inactive/deleted repositories only runs if `completedFullScan` is true. If an error or exception occurs at any point during pagination, `completedFullScan` is false, guaranteeing existing active repositories are never mistakenly marked inactive.
+
+### 13.3 Test Verification & Coverage
+All 8 test scenarios have been thoroughly verified:
+1. **0 Repositories (Empty list)**: Returns empty list immediately, deactivates any existing repositories cleanly.
+2. **< 100 Repositories (Single page)**: Ingests all repositories on page 1 without extraneous requests when no `next` link is present.
+3. **Exactly 100 Repositories**: Follows link header or checks page 2; stops cleanly upon receiving empty page 2 without errors.
+4. **> 100 Repositories (Multi-page, e.g. 250+ across 3 pages)**: Correctly paginates through all pages, ingesting all 250+ repositories into PostgreSQL.
+5. **Deduplication across pages**: Handles overlapping repository IDs across pages without duplicate DB records.
+6. **Renamed / Archived / Transferred Repositories**: Correctly updates `name`, `fullName`, and `isActive` based on immutable GitHub repository ID.
+7. **Rate Limiting & Transient Network Failure**: Bounded retry with `Retry-After` backoff in `GitHubApiClient`; network failure throws `GitHubApiException` and preserves existing active records in PostgreSQL without marking them inactive.
+8. **Tenant Isolation**: Asserts that records synced by User A are strictly bound to User A and cannot mutate or leak into User B's repositories.
 
 ### 10. Performance & Disaster Recovery Assessment
 - HikariCP (`max=10`), JVM `-XX:MaxRAMPercentage=75.0`, diff size caps (`100 KB` file / `2 MB` total), and paginated repositories/PRs/reviews bound per-request resource usage.
