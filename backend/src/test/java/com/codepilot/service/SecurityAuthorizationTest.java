@@ -5,6 +5,7 @@ import com.codepilot.model.Repository;
 import com.codepilot.model.User;
 import com.codepilot.repository.RepositoryRepository;
 import com.codepilot.repository.UserRepository;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -55,6 +56,11 @@ class SecurityAuthorizationTest {
         repositoryId = UUID.randomUUID();
 
         SecurityContextHolder.setContext(securityContext);
+    }
+
+    @AfterEach
+    void tearDown() {
+        SecurityContextHolder.clearContext();
     }
 
     @Test
