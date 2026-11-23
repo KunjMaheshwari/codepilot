@@ -68,6 +68,9 @@ jobs:
       - name: Run TypeScript typecheck
         run: npx tsc --noEmit
 
+      - name: Run frontend unit tests
+        run: npm test
+
       - name: Build Next.js production bundle
         env:
           NEXT_PUBLIC_API_BASE_URL: http://localhost:8080
