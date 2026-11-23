@@ -160,4 +160,45 @@ class ReviewResponseValidatorTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("Invalid filePath in finding");
     }
+
+    @Test
+    void rejectsWhitespaceOnlyRequiredFindingFields() {
+        DiffParser.ParsedFile file = new DiffParser.ParsedFile();
+        file.setFilePath("src/Test.java");
+        file.getAddedLines().add(2);
+
+        String blankEvidence = """
+                [{"title":"T","description":"D","category":"BUG","severity":"HIGH","filePath":"src/Test.java","lineNumber":2,"evidence":"   ","impact":"i","suggestedFix":"f","confidence":"HIGH"}]
+                """;
+        String blankTitle = """
+                [{"title":"  ","description":"D","category":"BUG","severity":"HIGH","filePath":"src/Test.java","lineNumber":2,"evidence":"e","impact":"i","suggestedFix":"f","confidence":"HIGH"}]
+                """;
+
+        assertThatThrownBy(() -> validator.validateAndParse(blankEvidence, List.of(file)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Missing required field: evidence");
+        assertThatThrownBy(() -> validator.validateAndParse(blankTitle, List.of(file)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Missing required field: title");
+    }
+
+    @Test
+    void normalizesMixedCaseSeverityCategoryAndConfidence() {
+        DiffParser.ParsedFile file = new DiffParser.ParsedFile();
+        file.setFilePath("src/Test.java");
+        file.getAddedLines().add(2);
+
+        String mixedCaseJson = """
+                [{"title":" Null check ","description":" Missing null guard ","category":"security","severity":" critical ","filePath":"src/Test.java","lineNumber":2,"evidence":"obj.call()","impact":"NPE","suggestedFix":"Check null","confidence":"Medium"}]
+                """;
+
+        List<ReviewFinding> findings = validator.validateAndParse(mixedCaseJson, List.of(file));
+
+        assertThat(findings).singleElement().satisfies(finding -> {
+            assertThat(finding.getTitle()).isEqualTo("Null check");
+            assertThat(finding.getCategory()).isEqualTo("SECURITY");
+            assertThat(finding.getSeverity()).isEqualTo("CRITICAL");
+            assertThat(finding.getConfidence()).isEqualTo("MEDIUM");
+        });
+    }
 }
