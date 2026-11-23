@@ -31,7 +31,7 @@ jobs:
       image_tag: ${{ steps.meta.outputs.tag }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Determine release image tag
         id: meta
