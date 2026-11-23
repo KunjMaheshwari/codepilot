@@ -20,13 +20,13 @@ Tracks all open GitHub issues (`#4`–`#31`), open contributor PR `#33`, and bas
 | `#14` | AI Tests | Test `DiffParser` deleted-file handling | P3 | PR_OPEN | #37 | `DiffParserTest.deletedFilePreservesOriginalPathAndTracksRemovedLines` |
 | `#15` | AI Tests | Test validator handling of empty/blank finding fields | P3 | PR_OPEN | #37 | `ReviewResponseValidatorTest.rejectsWhitespaceOnlyRequiredFindingFields` |
 | `#16` | AI Tests | Test validator severity normalization | P3 | PR_OPEN | #37 | `ReviewResponseValidatorTest.normalizesMixedCaseSeverityCategoryAndConfidence` |
-| `#17` | Frontend Tests | Add API client error-path tests | P3 | BLOCKED | — | Blocked on Wave 2 `025-frontend-unit-harness.md` |
-| `#18` | Frontend Tests | Add tests for dashboard stat cards | P3 | BLOCKED | — | Blocked on Wave 2 `025-frontend-unit-harness.md` |
-| `#19` | Frontend Tests | Add tests for `StatusBadge` variants | P3 | BLOCKED | — | Blocked on Wave 2 `025-frontend-unit-harness.md` |
-| `#20` | Frontend Tests | Add tests for `EmptyState` accessibility | P3 | BLOCKED | — | Blocked on Wave 2 `025-frontend-unit-harness.md` |
-| `#21` | Frontend Tests | Add tests for `ThemeToggle` | P3 | BLOCKED | — | Blocked on Wave 2 `025-frontend-unit-harness.md` |
-| `#22` | Frontend Tests | Add tests for the health route | P3 | BLOCKED | — | Blocked on Wave 2 `025-frontend-unit-harness.md` |
-| `#23` | Frontend Tests | Test dashboard error recovery UI | P3 | BLOCKED | — | Blocked on Wave 2 `025-frontend-unit-harness.md` |
+| `#17` | Frontend Tests | Add API client error-path tests | P3 | PR_OPEN | #41 | `src/lib/api.test.ts` (5 Vitest tests) |
+| `#18` | Frontend Tests | Add tests for dashboard stat cards | P3 | PR_OPEN | #41 | `src/components/dashboard/stats.test.tsx` (2 Vitest tests) |
+| `#19` | Frontend Tests | Add tests for `StatusBadge` variants | P3 | PR_OPEN | #41 | `src/components/ui/status-badge.test.tsx` (3 Vitest tests) |
+| `#20` | Frontend Tests | Add tests for `EmptyState` accessibility | P3 | PR_OPEN | #41 | `src/components/ui/empty-state.test.tsx` (2 Vitest tests) |
+| `#21` | Frontend Tests | Add tests for `ThemeToggle` | P3 | PR_OPEN | #41 | `src/components/theme/theme-toggle.test.tsx` (1 Vitest test) |
+| `#22` | Frontend Tests | Add tests for the health route | P3 | PR_OPEN | #41 | `src/app/api/health/route.test.ts` (1 Vitest test) |
+| `#23` | Frontend Tests | Test dashboard error recovery UI | P3 | PR_OPEN | #41 | `src/app/dashboard/error.test.tsx` (1 Vitest test) |
 | `#24` | Docs | Add a CodePilot glossary | P3 | PR_OPEN | #40 | `docs/GLOSSARY.md` |
 | `#25` | DevOps | Add dependency update automation | P3 | PR_OPEN | #38 | `.github/dependabot.yml` |
 | `#26` | DX | Add optional pre-commit checks | P3 | PR_OPEN | #38 | `.pre-commit-config.yaml` |

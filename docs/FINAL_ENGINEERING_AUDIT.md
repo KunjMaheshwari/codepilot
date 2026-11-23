@@ -20,30 +20,31 @@ A full-repository audit, baseline verification, defect remediation, test-coverag
 - **PR #36 (`test/backend-service-unit-tests`)**: Added Mockito unit tests for `RepositoryService`, `PullRequestService`, `ReviewService`, `GitHubWebhookService`, `WebhookDeliveryStateService`, and `ReviewJobRepositoryFacade` (Closes `#4`–`#8`, `#11`).
 - **PR #37 (`test/ai-parser-and-validator-edge-cases`)**: Added `DiffParser` rename/deleted-file tests and `ReviewResponseValidator` whitespace/case-normalization tests (Closes `#13`–`#16`; `#12` left to open PR `#33`).
 - **PR #38 (`chore/devops-dependabot-precommit-makefile`)**: Added `.github/dependabot.yml`, `.pre-commit-config.yaml`, and `Makefile` (Closes `#25`–`#27`).
-- **PR #39 (`fix/ci-security-context-leak`)**: Cleared `SecurityContextHolder` in `SecurityAuthorizationTest.@AfterEach` and `AiReviewEngineIntegrationTest.setUp()`.
+- **PR #39 (`fix/ci-security-context-leak`)**: Cleared `SecurityContextHolder` in `SecurityAuthorizationTest.@AfterEach`, `AiReviewEngineIntegrationTest.setUp()`, and `AiReviewEngineIntegrationTest.@AfterEach`. Passed all 6 CI checks (`Backend Build & Tests` with 0 skipped, `Frontend Lint, Typecheck, Build & E2E`, `Docker Build & Compose Validation`, and Vercel previews).
 - **PR #40 (`docs/contributor-guides-and-engineering-audit`)**: Added `docs/GLOSSARY.md`, `docs/REVIEW_PIPELINE.md`, `docs/API_CURL_EXAMPLES.md`, `docs/TROUBLESHOOTING.md`, `docs/FINDING_CATEGORIES.md`, `docs/ENGINEERING_REMEDIATION_TRACKER.md`, and `docs/FINAL_ENGINEERING_AUDIT.md` (Closes `#24`, `#28`–`#31`).
+- **PR #41 (`test/frontend-vitest-unit-tests`)**: Added Vitest 3 + React Testing Library 16 harness (`frontend/vitest.config.ts`, `frontend/src/test/setup.ts`), wired `npm test` into `.github/workflows/ci.yml`, and added 7 test files (15 tests passing in 873ms) resolving `#17`–`#23`.
 
 ## 4. Quality Gate Dashboard
 
 | Quality Gate | Expected Result | Actual Result | Notes |
 |---|---|---|---|
 | Backend compilation | PASS | PASS | `mvn test-compile -B` |
-| Backend unit tests | PASS | PASS | 152 tests run in service/unit branch, 0 failures |
-| Backend integration tests | PASS | PARTIAL / SKIPPED LOCALLY | 13 Testcontainers tests skipped locally (Docker daemon not running); verified via GitHub Actions |
+| Backend unit tests | PASS | PASS | 152 tests run on PR `#36`, 0 failures |
+| Backend integration tests | PASS | PASS IN CI / SKIPPED LOCALLY | 13 Testcontainers tests skipped locally (Docker daemon not running); verified PASS in GitHub Actions on PR `#39` and PR `#37` |
+| Frontend unit tests (Vitest) | PASS | PASS | 7 test files, 15 tests passed on PR `#41` |
 | Frontend lint | PASS | PASS | `npm run lint` (0 errors) |
 | TypeScript | PASS | PASS | `npx tsc --noEmit` (0 errors) |
 | Frontend build | PASS | PASS | `npm run build` |
-| Playwright E2E | PASS | PASS | `15 passed` in 7.6s on PR #34 |
+| Playwright E2E | PASS | PASS | `15 passed` in 7.6s on PR `#34`; passed in CI on all PRs `#34`–`#40` |
 | Docker compose config | PASS | PASS | `docker compose --env-file .env.example config -q` |
-| Docker build & runtime | PASS | BLOCKED LOCALLY | Local Docker daemon not running (`docker.sock` unavailable) |
-| Database migrations | PASS | VERIFIED IN CI | Flyway V1–V7 run in Testcontainers on GitHub Actions |
-| Redis integration | PASS | VERIFIED IN CI | Testcontainers Redis runs on GitHub Actions |
-| Security checks | PASS | PASS | `RateLimitFilter` hardened; `0` secret hits |
+| Docker build & Trivy scan | PASS | PASS IN CI / BLOCKED LOCALLY | Passed in GitHub Actions on PR `#37` & PR `#39`; local Docker daemon unavailable (`docker.sock` missing) |
+| Database migrations | PASS | PASS IN CI | Flyway V1–V7 verified in Testcontainers on GitHub Actions |
+| Redis integration | PASS | PASS IN CI | Testcontainers Redis verified on GitHub Actions |
+| Security checks | PASS | PASS | `RateLimitFilter` hardened; `npm audit --omit=dev`: 0 critical, 0 high, 4 moderate; 0 secret hits |
 | Git diff check | PASS | PASS | `git diff --check` |
 
 ## 5. Remaining Limitations & External Dependencies
-- **Local Docker Daemon**: Docker Desktop was not running in the local environment, so `docker compose up -d --build` and local Testcontainers runs could not be executed locally (13 Testcontainers tests skipped locally).
+- **Local Docker Daemon**: Docker Desktop was not running in the local environment, so `docker compose up -d --build` and local Testcontainers runs could not execute locally. Docker image builds, compose config, and Trivy scans passed in GitHub Actions on PRs `#37` and `#39`.
 - **Live GitHub OAuth & Gemini API**: Not executed against live external credentials in automated tests (mocked via `MockRestServiceServer` and Playwright route mocks).
-- **Frontend Unit Tests (`#17`–`#23`)**: Blocked on Wave 2 issue `025-frontend-unit-harness.md` (no unit test runner configured in `frontend/package.json`).
 - **PR #33**: Open fork PR from `@Golden007-prog` addressing `#12` (`DiffParser` CRLF line mapping); awaits maintainer workflow approval and merge.
-- **Note on PRs #34–#38**: Because PR #39 (`fix/ci-security-context-leak`) is not yet merged into `main`, `Backend Build & Tests` on sibling PRs branched from `main` prior to #39 may hit the `SecurityAuthorizationTest` -> `AiReviewEngineIntegrationTest` ordering flake until #39 is merged and branches are rebased.
+- **Merge Order for PRs #34–#41**: Merge **PR #39** (`fix/ci-security-context-leak`) first, then rebase or re-run CI on `#34`, `#35`, `#36`, `#38`, `#40`, `#41` so they inherit the `SecurityContextHolder` leak fix in `main` (all 5 prior Backend CI failures were confirmed to be that single pre-`#39` leak).
