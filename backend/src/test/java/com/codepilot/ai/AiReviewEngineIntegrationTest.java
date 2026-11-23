@@ -98,6 +98,7 @@ class AiReviewEngineIntegrationTest {
         testUser.setEmail("testuser@example.com");
         testUser = userRepository.save(testUser);
 
+        SecurityContextHolder.clearContext();
         OAuth2User oauth2User = new DefaultOAuth2User(
                 List.of(),
                 Map.of("email", "testuser@example.com", "login", "testuser"),
