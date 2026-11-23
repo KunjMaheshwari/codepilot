@@ -31,7 +31,7 @@ jobs:
       image_tag: ${{ steps.meta.outputs.tag }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Determine release image tag
         id: meta
@@ -43,7 +43,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to container registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ vars.CONTAINER_REGISTRY || 'ghcr.io' }}
           username: ${{ github.actor }}

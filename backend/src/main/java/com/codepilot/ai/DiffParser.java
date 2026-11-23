@@ -106,9 +106,9 @@ public class DiffParser {
             }
             char marker = line.charAt(0);
             if (marker == ' ') {
+                current.getChangedLineRanges().add(new LineRange(oldLine, newLine, false, false));
                 oldLine++;
                 newLine++;
-                current.getChangedLineRanges().add(new LineRange(oldLine, newLine, false, false));
             } else if (marker == '+') {
                 current.getAddedLines().add(newLine);
                 current.getChangedLineRanges().add(new LineRange(null, newLine, true, false));
