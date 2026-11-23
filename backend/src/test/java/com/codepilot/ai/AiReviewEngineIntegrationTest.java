@@ -13,6 +13,7 @@ import com.codepilot.repository.ReviewRepository;
 import com.codepilot.repository.UserRepository;
 import com.codepilot.service.GitHubIntegrationService;
 import com.codepilot.service.ReviewService;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -98,6 +99,7 @@ class AiReviewEngineIntegrationTest {
         testUser.setEmail("testuser@example.com");
         testUser = userRepository.save(testUser);
 
+        SecurityContextHolder.clearContext();
         OAuth2User oauth2User = new DefaultOAuth2User(
                 List.of(),
                 Map.of("email", "testuser@example.com", "login", "testuser"),
@@ -121,6 +123,11 @@ class AiReviewEngineIntegrationTest {
         testPr.setAuthor("testuser");
         testPr.setStatus("open");
         testPr = pullRequestRepository.save(testPr);
+    }
+
+    @AfterEach
+    void tearDown() {
+        SecurityContextHolder.clearContext();
     }
 
     @Test
