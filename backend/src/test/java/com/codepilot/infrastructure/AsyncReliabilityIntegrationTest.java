@@ -50,7 +50,10 @@ import java.util.concurrent.Future;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-@SpringBootTest
+@SpringBootTest(properties = {
+        "codepilot.review.async.worker-delay-ms=3600000",
+        "codepilot.webhook.worker-delay-ms=3600000"
+})
 @Testcontainers(disabledWithoutDocker = true)
 class AsyncReliabilityIntegrationTest {
 
