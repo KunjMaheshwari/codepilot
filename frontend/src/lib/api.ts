@@ -161,6 +161,14 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
     if (!response.ok) {
       let message = `Request failed (${response.status})`;
+      const renderRouting = response.headers.get("x-render-routing") ?? "";
+      const contentType = response.headers.get("content-type") ?? "";
+      if (
+        response.status === 503 &&
+        (renderRouting.toLowerCase().includes("hibernate") || contentType.toLowerCase().includes("text/html"))
+      ) {
+        throw new ApiError("Backend service is waking up. Please retry in a few seconds.", 503);
+      }
       try {
         const error = (await response.json()) as { message?: string };
         message = error.message ?? message;
