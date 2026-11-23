@@ -18,6 +18,7 @@
 
 ## Health Checks & Observability
 
+- **Port Binding**: Spring Boot binds `server.port=${PORT:8080}` on `0.0.0.0`, and `backend/Dockerfile` checks `http://127.0.0.1:${PORT:-8080}/actuator/health/readiness` so PaaS providers (such as Render) that inject `PORT` work without extra overrides. Set `REDIS_SSL_ENABLED=true` when connecting to TLS-enabled managed Redis (e.g., Upstash).
 - **Backend Liveness**: `GET /actuator/health/liveness` (unauthenticated, returns `{"status":"UP"}`).
 - **Backend Readiness**: `GET /actuator/health/readiness` (unauthenticated, verifies database & Redis readiness without leaking internal details when `ACTUATOR_HEALTH_SHOW_DETAILS=never`).
 - **Backend Metrics**: `GET /actuator/metrics` and `GET /actuator/info` (authenticated).

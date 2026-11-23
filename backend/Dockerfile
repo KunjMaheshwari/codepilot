@@ -19,7 +19,7 @@ USER codepilot
 EXPOSE 8080
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=45s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:8080/actuator/health/readiness | grep -q '"status":"UP"' || exit 1
+  CMD wget -qO- "http://127.0.0.1:${PORT:-8080}/actuator/health/readiness" | grep -q '"status":"UP"' || exit 1
 
 ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75.0", "-XX:+UseG1GC", "-Djava.security.egd=file:/dev/urandom", "-jar", "/app/app.jar"]
 
