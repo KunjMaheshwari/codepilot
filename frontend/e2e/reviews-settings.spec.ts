@@ -62,13 +62,14 @@ test.describe("Reviews Workspace & Settings", () => {
 
     await page.route(`**/api/v1/reviews/${queuedReview.id}/job`, (route) => {
       pollCount += 1;
+      const status = pollCount <= 1 ? "QUEUED" : "COMPLETED";
       return route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
           jobId: "66666666-6666-6666-6666-666666666677",
           reviewId: queuedReview.id,
-          status: "COMPLETED",
+          status,
           attemptCount: 1,
         }),
       });
