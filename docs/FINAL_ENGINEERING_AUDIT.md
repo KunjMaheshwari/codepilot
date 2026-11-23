@@ -1,7 +1,9 @@
 # Final Engineering Audit
 
 ## 1. Executive Summary
-All remediation PRs (`#33`–`#41`) and 10 compatible Dependabot PRs (`#42`, `#43`, `#44`, `#46`, `#48`, `#49`, `#50`, `#52`, `#53`, `#54`) have been verified in GitHub Actions and squash-merged into `main` (HEAD `5337ab4`). Three incompatible major-version Dependabot PRs (`#45` Spring Boot 4.2.0, `#47` Vitest 5.1.1, `#51` Springdoc 3.2.0) were closed responsibly with technical migration guidance.
+All remediation PRs (`#33`–`#41`), 10 compatible Dependabot PRs (`#42`–`#44`, `#46`, `#48`–`#50`, `#52`–`#54`), and production stabilization PRs (`#56`–`#59`, plus `#60` for `AsyncReliabilityIntegrationTest` determinism and documentation) have been verified and merged into `main`. Three incompatible major-version Dependabot PRs (`#45` Spring Boot 4.2.0, `#47` Vitest 5.1.1, `#51` Springdoc 3.2.0) were closed responsibly with technical migration guidance.
+
+Live production verification against `https://codepilot-wi3s.vercel.app` and `https://codepilot-knep.onrender.com` was executed using the dedicated Playwright production E2E suite (`frontend/e2e/production/`). All 8 public/infrastructure production tests passed (`0` failures, `0` console/page/5xx errors); 3 authenticated production tests were cleanly skipped because interactive GitHub OAuth storage state (`PLAYWRIGHT_STORAGE_STATE`) is not provisioned in this environment.
 
 ## 2. Dependabot Maintenance Summary (`PRs #42–#54`)
 
@@ -21,24 +23,22 @@ All remediation PRs (`#33`–`#41`) and 10 compatible Dependabot PRs (`#42`, `#4
 | **#53** | `react` (+ `react-dom`) | `19.3.0` → `19.3.1` | **FIXED & MERGED** | `5337ab4` (aligned `react-dom` to `19.3.1` in `b668ad7`; CI run `45141223764` PASS) |
 | **#54** | `@playwright/test` | `1.65.0` → `1.65.1` | **MERGED** | `8efa747` |
 
-## 3. Quality Gate Dashboard (Post-Merge on `main` `5337ab4`)
+## 3. Quality Gate Dashboard (Post-Merge on `main` `2b7ba6a` + PR #60)
 
 | Quality Gate | Result | Evidence |
 |---|---|---|
-| Backend compilation | **PASS** | `cd backend && mvn clean verify -B` (72 main + 36 test sources compiled with Lombok `1.18.48`) |
-| Backend unit tests | **PASS** | `161` run, `0` failures, `0` errors (`13` Testcontainers tests skipped locally) |
-| Backend integration tests (Testcontainers) | **PASS (CI) / BLOCKED (Local)** | Passed in GitHub Actions (run `45141223764`); skipped locally because Docker daemon is not running |
-| Frontend `npm ci` + Vitest | **PASS** | `cd frontend && npm ci && npm test`: `7` files, `15/15` passed in `895ms` |
-| Frontend lint (ESLint) | **PASS** | `cd frontend && npm run lint`: 0 errors |
-| Frontend TypeScript | **PASS** | `cd frontend && npx tsc --noEmit`: 0 errors |
+| Backend compilation | **PASS** | `cd backend && mvn clean verify -B` (72 main + 37 test sources compiled) |
+| Backend unit tests | **PASS** | `166` run, `0` failures, `0` errors (`13` Testcontainers tests skipped locally) |
+| Backend integration tests (Testcontainers) | **PASS (CI) / BLOCKED (Local)** | Verified in GitHub Actions; `AsyncReliabilityIntegrationTest` scheduler race eliminated in PR #60 |
+| Frontend Vitest unit tests | **PASS** | `cd frontend && npm test`: `8` files, `20/20` passed |
+| Frontend lint (ESLint) & TypeScript | **PASS** | `npm run lint` (`0` errors), `npx tsc --noEmit` (`0` errors) |
 | Frontend production build | **PASS** | `cd frontend && npm run build`: Next.js 16.4.5 succeeded |
-| Frontend Playwright E2E | **PASS** | `cd frontend && npx playwright test` (`1.65.1`): `15/15` passed in `8.9s` |
-| Docker Compose config | **PASS** | `docker compose --env-file .env.example config -q` |
-| Docker image builds & Trivy scans | **PASS (CI)** | GitHub Actions `Docker Build & Compose Validation` passed on run `45141223764` |
+| Frontend local Playwright E2E | **PASS** | `cd frontend && npx playwright test`: `15/15` passed in `8.4s` |
+| Live Playwright Production Audit (`e2e/production/`) | **8 PASS / 3 SKIPPED (BLOCKED)** | `PLAYWRIGHT_SKIP_WEBSERVER=1 PLAYWRIGHT_BASE_URL=https://codepilot-wi3s.vercel.app npx playwright test --project=production` (`8 passed` in `8.3s`; `3 skipped` awaiting `PLAYWRIGHT_STORAGE_STATE`) |
+| Live Production Health & Proxy | **PASS** | Render `/actuator/health/liveness` (`200`), `/readiness` (`200`), Vercel `/api/health` (`200`), `/api/v1/auth/csrf` (`204`), `/oauth2/authorization/github` (`302` → `github.com`) |
+| Vercel Production Deployment | **READY** | `Vercel – codepilot-wi3s` `CjX3qdL4PPoricyDwRq2bEWrDJgs` (`2b7ba6a`) |
+| Docker Compose config & git diff check | **PASS** | `docker compose --env-file .env.example config -q && git diff --check` |
 | Local Docker Compose runtime smoke test | **BLOCKED** | Local Docker Desktop daemon not running (`docker.sock` missing) |
-| Live GitHub OAuth & Gemini E2E | **NOT TESTED** | Requires live external credentials |
-| Frontend `npm audit --omit=dev` | **PASS (0 Critical/High)** | `0` critical, `0` high, `4` moderate, `0` low (`all`: `2` critical devDeps only, `11` moderate) |
-| Git diff check | **PASS** | `git diff --check` |
 
 ## 4. Final Readiness Assessment
-**CONDITIONALLY READY** — Zero open Dependabot PRs, zero open Wave 1 issues, zero critical/high production npm vulnerabilities, and all automated backend, frontend, and CI Docker quality gates pass on `main` (`5337ab4`). Full `PRODUCTION READY` status remains contingent on starting local Docker Desktop for `docker compose up -d --build` runtime smoke testing and executing live authenticated GitHub OAuth / Gemini smoke tests.
+**CONDITIONALLY READY** — All root causes for Issues A (repository sync timeout), B (stale header & expired-session misclassification), and C (stuck `PENDING` review jobs when Redis is unavailable) are fixed, regression-tested, deployed to Vercel production, and verified across all 8 public/infrastructure Playwright production checks (`0` failures). Upgrading from `CONDITIONALLY READY` to `PRODUCTION READY` requires running the 3 authenticated specs in `frontend/e2e/production/authenticated-audit.spec.ts` with a real GitHub OAuth `PLAYWRIGHT_STORAGE_STATE` against live production (and confirming Render auto-deployed backend commit `2b7ba6a`+).
