@@ -212,4 +212,59 @@ class DiffParserTest {
         assertThat(files.get(1).isRenamed()).isTrue();
         assertThat(files.get(1).isReviewable()).isFalse();
     }
+
+    @Test
+    void parsesRenameHeadersAcrossNestedPathsWithEdits() {
+        String diff = """
+                diff --git a/src/legacy/Helper.java b/src/core/ServiceHelper.java
+                similarity index 88%
+                rename from src/legacy/Helper.java
+                rename to src/core/ServiceHelper.java
+                index 1111111..2222222 100644
+                --- a/src/legacy/Helper.java
+                +++ b/src/core/ServiceHelper.java
+                @@ -4,3 +4,4 @@
+                 public class ServiceHelper {
+                -    void oldMethod() {}
+                +    void newMethod() {}
+                +    void extraMethod() {}
+                 }
+                """;
+
+        List<DiffParser.ParsedFile> files = parser.parseDiff(diff);
+
+        assertThat(files).singleElement().satisfies(file -> {
+            assertThat(file.isRenamed()).isTrue();
+            assertThat(file.getOldFilePath()).isEqualTo("src/legacy/Helper.java");
+            assertThat(file.getFilePath()).isEqualTo("src/core/ServiceHelper.java");
+            assertThat(file.getRemovedLines()).containsExactly(5);
+            assertThat(file.getAddedLines()).containsExactly(5, 6);
+            assertThat(file.isReviewable()).isTrue();
+        });
+    }
+
+    @Test
+    void deletedFilePreservesOriginalPathAndTracksRemovedLines() {
+        String diff = """
+                diff --git a/src/Obsolete.java b/src/Obsolete.java
+                deleted file mode 100644
+                index 1111111..0000000
+                --- a/src/Obsolete.java
+                +++ /dev/null
+                @@ -1,3 +0,0 @@
+                -package com.codepilot;
+                -
+                -public class Obsolete {}
+                """;
+
+        List<DiffParser.ParsedFile> files = parser.parseDiff(diff);
+
+        assertThat(files).singleElement().satisfies(file -> {
+            assertThat(file.isDeleted()).isTrue();
+            assertThat(file.getFilePath()).isEqualTo("src/Obsolete.java");
+            assertThat(file.getAddedLines()).isEmpty();
+            assertThat(file.getRemovedLines()).containsExactly(1, 2, 3);
+            assertThat(file.isReviewable()).isFalse();
+        });
+    }
 }
