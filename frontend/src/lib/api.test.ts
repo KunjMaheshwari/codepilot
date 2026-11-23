@@ -113,6 +113,24 @@ describe("api client error handling and CSRF behavior", () => {
     });
   });
 
+  it("maps 503 Render hibernation HTML responses to a clear waking-up ApiError", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response("<!doctype html><title>Render - Application loading</title>", {
+        status: 503,
+        headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          "x-render-routing": "hibernate-pending-wake",
+        },
+      }),
+    );
+
+    await expect(api.getDashboard()).rejects.toMatchObject({
+      name: "ApiError",
+      status: 503,
+      message: "Backend service is waking up. Please retry in a few seconds.",
+    });
+  });
+
   it("formats error messages safely via apiErrorMessage", () => {
     expect(apiErrorMessage(new ApiError("Custom error", 400))).toBe("Custom error");
     expect(apiErrorMessage("unknown")).toBe("Something went wrong. Please try again.");
