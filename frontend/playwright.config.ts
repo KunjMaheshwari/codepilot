@@ -19,7 +19,18 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
+      testIgnore: /production\/.*/,
       use: { ...devices["Desktop Chrome"] },
+    },
+    {
+      name: "production",
+      testMatch: /production\/.*\.spec\.ts/,
+      use: {
+        ...devices["Desktop Chrome"],
+        ...(process.env.PLAYWRIGHT_STORAGE_STATE
+          ? { storageState: process.env.PLAYWRIGHT_STORAGE_STATE }
+          : {}),
+      },
     },
   ],
   webServer: process.env.PLAYWRIGHT_SKIP_WEBSERVER

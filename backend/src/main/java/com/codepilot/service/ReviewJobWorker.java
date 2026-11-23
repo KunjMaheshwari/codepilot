@@ -71,7 +71,15 @@ public class ReviewJobWorker {
         if (!enabled) {
             return;
         }
-        String payload = redisTemplate.opsForList().rightPopAndLeftPush(queue, processingQueue);
+        String payload;
+        try {
+            payload = redisTemplate.opsForList().rightPopAndLeftPush(queue, processingQueue);
+        } catch (RuntimeException exception) {
+            log.warn("Redis queue unavailable ({}); falling back to database polling for pending review jobs",
+                    exception.getClass().getSimpleName());
+            pollPendingJobsFromDatabase();
+            return;
+        }
         if (payload == null) {
             return;
         }
@@ -92,34 +100,7 @@ public class ReviewJobWorker {
                 acknowledge(payload);
                 return;
             }
-            activeJobIds.add(job.getId());
-            try {
-                orchestrator.orchestrateReview(job);
-            } finally {
-                activeJobIds.remove(job.getId());
-            }
-            if ("FAILED".equals(job.getStatus())) {
-                if (reviewJobService.isPermanentFailure(job)) {
-                    log.warn("Permanent review failure jobId={} correlationId={} category={}; not retrying",
-                            job.getId(), job.getCorrelationId(), job.getLastErrorCategory());
-                } else if (job.getAttemptCount() < maxAttempts) {
-                    reviewJobService.markRetrying(job, job.getErrorMessage());
-                    long delayMs = computeRetryDelayMillis(job.getAttemptCount(), job.getRetryAfterSeconds());
-                    long executeAt = System.currentTimeMillis() + delayMs;
-                    redisTemplate.opsForZSet().add(retryQueue, payload, executeAt);
-                    retryScheduledCount.incrementAndGet();
-                    log.warn("Scheduled delayed retry jobId={} correlationId={} attempt={} delayMs={}",
-                            job.getId(), job.getCorrelationId(), job.getAttemptCount(), delayMs);
-                } else {
-                    reviewJobService.markRetryExhausted(job, job.getErrorMessage());
-                    redisTemplate.opsForList().leftPush(deadLetterQueue, payload);
-                    deadLetterCount.incrementAndGet();
-                    log.error("Exhausted review job moved to dead-letter queue jobId={} correlationId={} attempt={}",
-                            job.getId(), job.getCorrelationId(), job.getAttemptCount());
-                }
-            } else {
-                processedCount.incrementAndGet();
-            }
+            executeClaimedJob(job, payload);
             acknowledge(payload);
         } catch (JsonProcessingException exception) {
             moveToDeadLetter(payload);
@@ -130,13 +111,81 @@ public class ReviewJobWorker {
         }
     }
 
+    private void pollPendingJobsFromDatabase() {
+        List<ReviewJob> candidates = reviewJobService.findPendingJobs();
+        if (candidates == null || candidates.isEmpty()) {
+            candidates = reviewJobService.findRetryableJobs(Duration.ofSeconds(15));
+        }
+        if (candidates == null || candidates.isEmpty()) {
+            return;
+        }
+        for (ReviewJob candidate : candidates) {
+            if (!reviewJobService.claim(candidate.getId())) {
+                continue;
+            }
+            ReviewJob job = jobRepository.find(candidate.getId());
+            if (job == null) {
+                continue;
+            }
+            log.info("Processing review job {} via database fallback correlationId={}",
+                    job.getId(), job.getCorrelationId());
+            executeClaimedJob(job, null);
+            return;
+        }
+    }
+
+    private void executeClaimedJob(ReviewJob job, String redisPayload) {
+        activeJobIds.add(job.getId());
+        try {
+            orchestrator.orchestrateReview(job);
+        } finally {
+            activeJobIds.remove(job.getId());
+        }
+        if ("FAILED".equals(job.getStatus())) {
+            if (reviewJobService.isPermanentFailure(job)) {
+                log.warn("Permanent review failure jobId={} correlationId={} category={}; not retrying",
+                        job.getId(), job.getCorrelationId(), job.getLastErrorCategory());
+            } else if (job.getAttemptCount() < maxAttempts) {
+                reviewJobService.markRetrying(job, job.getErrorMessage());
+                if (redisPayload != null) {
+                    long delayMs = computeRetryDelayMillis(job.getAttemptCount(), job.getRetryAfterSeconds());
+                    long executeAt = System.currentTimeMillis() + delayMs;
+                    redisTemplate.opsForZSet().add(retryQueue, redisPayload, executeAt);
+                    log.warn("Scheduled delayed retry jobId={} correlationId={} attempt={} delayMs={}",
+                            job.getId(), job.getCorrelationId(), job.getAttemptCount(), delayMs);
+                } else {
+                    log.warn("Marked review job for database-backed retry jobId={} correlationId={} attempt={}",
+                            job.getId(), job.getCorrelationId(), job.getAttemptCount());
+                }
+                retryScheduledCount.incrementAndGet();
+            } else {
+                reviewJobService.markRetryExhausted(job, job.getErrorMessage());
+                if (redisPayload != null) {
+                    redisTemplate.opsForList().leftPush(deadLetterQueue, redisPayload);
+                }
+                deadLetterCount.incrementAndGet();
+                log.error("Exhausted review job moved to dead-letter state jobId={} correlationId={} attempt={}",
+                        job.getId(), job.getCorrelationId(), job.getAttemptCount());
+            }
+        } else {
+            processedCount.incrementAndGet();
+        }
+    }
+
     @Scheduled(fixedDelayString = "${codepilot.review.async.worker-delay-ms:1000}")
     public void promoteDueRetries() {
         if (!enabled) {
             return;
         }
         long now = System.currentTimeMillis();
-        Set<String> duePayloads = redisTemplate.opsForZSet().rangeByScore(retryQueue, 0, now, 0, 50);
+        Set<String> duePayloads;
+        try {
+            duePayloads = redisTemplate.opsForZSet().rangeByScore(retryQueue, 0, now, 0, 50);
+        } catch (RuntimeException exception) {
+            log.debug("Skipping Redis retry promotion while Redis is unavailable ({})",
+                    exception.getClass().getSimpleName());
+            return;
+        }
         if (duePayloads == null || duePayloads.isEmpty()) {
             return;
         }
@@ -200,7 +249,14 @@ public class ReviewJobWorker {
     }
 
     private boolean requeueStaleMessage(java.util.UUID jobId) {
-        List<String> messages = redisTemplate.opsForList().range(processingQueue, 0, -1);
+        List<String> messages;
+        try {
+            messages = redisTemplate.opsForList().range(processingQueue, 0, -1);
+        } catch (RuntimeException exception) {
+            log.debug("Unable to inspect Redis processing queue while Redis is unavailable ({})",
+                    exception.getClass().getSimpleName());
+            return false;
+        }
         if (messages == null) {
             return false;
         }

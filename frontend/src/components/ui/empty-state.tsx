@@ -4,9 +4,11 @@ import { Button } from "@/components/ui/button";
 export function ErrorBanner({
   message,
   onRetry,
+  action,
 }: {
   message: string;
   onRetry?: () => void;
+  action?: React.ReactNode;
 }) {
   return (
     <div
@@ -17,11 +19,14 @@ export function ErrorBanner({
         <AlertCircle className="h-4 w-4 shrink-0" />
         <span>{message}</span>
       </div>
-      {onRetry && (
-        <Button size="sm" variant="outline" onClick={onRetry}>
-          Retry
-        </Button>
-      )}
+      <div className="flex items-center gap-2">
+        {action}
+        {onRetry && (
+          <Button size="sm" variant="outline" onClick={onRetry}>
+            Retry
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

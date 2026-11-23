@@ -82,4 +82,23 @@ class ReviewJobProducerTest {
         verify(reviewJobService).markPending(job);
         assertThat(job.getStatus()).isNotEqualTo("FAILED");
     }
+
+    @Test
+    void recoverPendingJobsStopsTickWhenRedisIsUnavailable() {
+        ReflectionTestUtils.setField(producer, "enabled", true);
+        ReviewJob secondJob = new ReviewJob();
+        secondJob.setId(UUID.randomUUID());
+        secondJob.setReview(job.getReview());
+        secondJob.setCorrelationId("correlation-2");
+
+        when(reviewJobService.findPendingJobs()).thenReturn(java.util.List.of(job, secondJob));
+        when(redisTemplate.opsForList()).thenReturn(listOperations);
+        doThrow(new IllegalStateException("redis unavailable"))
+                .when(listOperations).leftPush(eq("review-queue"), anyString());
+
+        producer.recoverPendingJobs();
+
+        verify(reviewJobService).markPending(job);
+        org.mockito.Mockito.verify(reviewJobService, org.mockito.Mockito.never()).markPending(secondJob);
+    }
 }

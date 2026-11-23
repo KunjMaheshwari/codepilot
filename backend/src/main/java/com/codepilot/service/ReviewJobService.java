@@ -183,6 +183,11 @@ public class ReviewJobService {
     }
 
     @Transactional(readOnly = true)
+    public List<ReviewJob> findRetryableJobs(Duration delay) {
+        return reviewJobRepository.findRetryableJobs(ZonedDateTime.now().minus(delay));
+    }
+
+    @Transactional(readOnly = true)
     public Optional<ReviewJob> findByReviewId(UUID reviewId) {
         return reviewJobRepository.findByReviewId(reviewId);
     }

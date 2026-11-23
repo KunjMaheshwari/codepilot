@@ -39,6 +39,10 @@ public class ReviewJobProducer {
     private long queuedRecoverySeconds = 60;
 
     public void publish(ReviewJob job) {
+        publishInternal(job);
+    }
+
+    private boolean publishInternal(ReviewJob job) {
         ReviewJobMessage message = new ReviewJobMessage(
                 job.getId(),
                 job.getReview().getId(),
@@ -50,9 +54,12 @@ public class ReviewJobProducer {
             redisTemplate.opsForList().leftPush(queue, objectMapper.writeValueAsString(message));
             reviewJobService.markQueued(job);
             log.info("Queued review job {} correlationId={}", job.getId(), job.getCorrelationId());
+            return true;
         } catch (JsonProcessingException | RuntimeException exception) {
             reviewJobService.markPending(job);
-            log.error("Failed to publish review job {} correlationId={}", job.getId(), job.getCorrelationId());
+            log.error("Failed to publish review job {} correlationId={} reason={}",
+                    job.getId(), job.getCorrelationId(), exception.getClass().getSimpleName());
+            return false;
         }
     }
 
@@ -61,17 +68,14 @@ public class ReviewJobProducer {
             return;
         }
         for (ReviewJob job : reviewJobService.findPendingJobs()) {
-            try {
-                publish(job);
-            } catch (RuntimeException ignored) {
-                log.warn("Pending review job {} remains unpublished", job.getId());
+            if (!publishInternal(job)) {
+                // Stop hammering Redis for the remainder of this tick when it is unavailable.
+                return;
             }
         }
         for (ReviewJob staleQueued : reviewJobService.findStaleQueuedJobs(Duration.ofSeconds(queuedRecoverySeconds))) {
-            try {
-                publish(staleQueued);
-            } catch (RuntimeException ignored) {
-                log.warn("Stale queued review job {} remains unpublished", staleQueued.getId());
+            if (!publishInternal(staleQueued)) {
+                return;
             }
         }
     }

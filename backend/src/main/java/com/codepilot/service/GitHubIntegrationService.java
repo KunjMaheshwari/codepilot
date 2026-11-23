@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -89,6 +90,16 @@ public class GitHubIntegrationService {
     public List<Repository> synchronizeAllRepositories(User user) {
         ConnectedGitHubAccount account = getConnectedAccount(user);
         String token = encryptionService.decrypt(account.getAccessToken());
+        Map<String, Repository> existingByGithubId = new HashMap<>();
+        List<Repository> existingRepos = repositoryRepository.findByOwnerId(user.getId());
+        if (existingRepos != null) {
+            for (Repository existing : existingRepos) {
+                if (existing.getGithubRepoId() != null) {
+                    existingByGithubId.put(existing.getGithubRepoId(), existing);
+                }
+            }
+        }
+
         List<Repository> synced = new ArrayList<>();
         Set<String> seenGithubRepoIds = new HashSet<>();
         boolean completedFullScan = false;
@@ -126,8 +137,9 @@ public class GitHubIntegrationService {
             for (Map<String, Object> remote : pageItems) {
                 String githubId = extractGithubRepoId(remote);
                 if (seenGithubRepoIds.add(githubId)) {
-                    Repository repository = upsertRepository(user, remote);
+                    Repository repository = mapRepository(user, remote, existingByGithubId.get(githubId));
                     repository.setLastSyncedAt(syncedAt);
+                    existingByGithubId.put(githubId, repository);
                     synced.add(repository);
                 } else {
                     log.debug("Skipping duplicate repository with GitHub ID {} on page {}", githubId, currentPage);
@@ -146,14 +158,19 @@ public class GitHubIntegrationService {
             }
         }
 
+        List<Repository> toPersist = new ArrayList<>(synced);
         if (completedFullScan) {
-            for (Repository existing : repositoryRepository.findByOwnerIdAndIsActiveTrue(user.getId())) {
-                if (!seenGithubRepoIds.contains(existing.getGithubRepoId())) {
+            for (Repository existing : existingByGithubId.values()) {
+                if (Boolean.TRUE.equals(existing.getIsActive())
+                        && !seenGithubRepoIds.contains(existing.getGithubRepoId())) {
                     existing.setIsActive(false);
                     existing.setLastSyncedAt(syncedAt);
-                    repositoryRepository.save(existing);
+                    toPersist.add(existing);
                 }
             }
+        }
+        if (!toPersist.isEmpty()) {
+            repositoryRepository.saveAll(toPersist);
         }
         return synced;
     }
@@ -192,17 +209,32 @@ public class GitHubIntegrationService {
         ConnectedGitHubAccount account = getConnectedAccount(user);
         String token = encryptionService.decrypt(account.getAccessToken());
         String[] parts = splitFullName(repository);
+        Map<Integer, PullRequest> existingByNumber = new HashMap<>();
+        List<PullRequest> existingPrs = pullRequestRepository.findByRepositoryId(repository.getId());
+        if (existingPrs != null) {
+            for (PullRequest existing : existingPrs) {
+                if (existing.getPrNumber() != null) {
+                    existingByNumber.put(existing.getPrNumber(), existing);
+                }
+            }
+        }
+
         List<PullRequest> synced = new ArrayList<>();
 
         for (int page = 1; page <= MAX_SYNC_PAGES; page++) {
             List<Map<String, Object>> pageItems = gitHubApiClient.getPullRequests(
                     token, parts[0], parts[1], page, DEFAULT_SYNC_PAGE_SIZE);
             for (Map<String, Object> remote : pageItems) {
-                synced.add(upsertPullRequest(repository, remote));
+                PullRequest mapped = mapPullRequest(repository, remote, existingByNumber);
+                existingByNumber.put(mapped.getPrNumber(), mapped);
+                synced.add(mapped);
             }
             if (pageItems.size() < DEFAULT_SYNC_PAGE_SIZE) {
                 break;
             }
+        }
+        if (!synced.isEmpty()) {
+            pullRequestRepository.saveAll(synced);
         }
         repository.setLastSyncedAt(ZonedDateTime.now());
         repositoryRepository.save(repository);
@@ -224,11 +256,28 @@ public class GitHubIntegrationService {
         if (!(rawNumber instanceof Number number)) {
             throw new IllegalArgumentException("GitHub response is missing number");
         }
-        PullRequest pullRequest = pullRequestRepository
+        PullRequest existing = pullRequestRepository
                 .findByRepositoryIdAndPrNumber(repository.getId(), number.intValue())
-                .orElseGet(PullRequest::new);
+                .orElse(null);
+        PullRequest pullRequest = populatePullRequest(repository, remote, number.intValue(), existing);
+        return pullRequestRepository.save(pullRequest);
+    }
+
+    private PullRequest mapPullRequest(
+            Repository repository, Map<String, Object> remote, Map<Integer, PullRequest> existingByNumber) {
+        Object rawNumber = remote.get("number");
+        if (!(rawNumber instanceof Number number)) {
+            throw new IllegalArgumentException("GitHub response is missing number");
+        }
+        return populatePullRequest(
+                repository, remote, number.intValue(), existingByNumber.get(number.intValue()));
+    }
+
+    private PullRequest populatePullRequest(
+            Repository repository, Map<String, Object> remote, int prNumber, PullRequest existing) {
+        PullRequest pullRequest = existing != null ? existing : new PullRequest();
         pullRequest.setRepository(repository);
-        pullRequest.setPrNumber(number.intValue());
+        pullRequest.setPrNumber(prNumber);
         pullRequest.setTitle(requiredString(remote, "title"));
         Object rawUser = remote.get("user");
         Object login = rawUser instanceof Map<?, ?> values ? values.get("login") : null;
@@ -244,7 +293,7 @@ public class GitHubIntegrationService {
         pullRequest.setAdditions(integerValue(remote, "additions"));
         pullRequest.setDeletions(integerValue(remote, "deletions"));
         pullRequest.setChangedFiles(integerValue(remote, "changed_files"));
-        return pullRequestRepository.save(pullRequest);
+        return pullRequest;
     }
 
     private Map<?, ?> nestedMap(Map<String, Object> values, String key) {
@@ -268,8 +317,18 @@ public class GitHubIntegrationService {
             throw new IllegalArgumentException("GitHub response is missing id");
         }
         String githubRepoId = String.valueOf(rawId);
-        Repository repository = repositoryRepository.findByGithubRepoIdAndOwnerId(githubRepoId, user.getId())
-                .orElseGet(Repository::new);
+        Repository existing = repositoryRepository.findByGithubRepoIdAndOwnerId(githubRepoId, user.getId())
+                .orElse(null);
+        return repositoryRepository.save(mapRepository(user, remote, existing));
+    }
+
+    private Repository mapRepository(User user, Map<String, Object> remote, Repository existing) {
+        Object rawId = remote.get("id");
+        if (rawId == null || String.valueOf(rawId).isBlank()) {
+            throw new IllegalArgumentException("GitHub response is missing id");
+        }
+        String githubRepoId = String.valueOf(rawId);
+        Repository repository = existing != null ? existing : new Repository();
         repository.setOwner(user);
         repository.setGithubRepoId(githubRepoId);
         repository.setName(requiredString(remote, "name"));
@@ -281,7 +340,7 @@ public class GitHubIntegrationService {
         boolean archived = Boolean.TRUE.equals(remote.get("archived"));
         boolean disabled = Boolean.TRUE.equals(remote.get("disabled"));
         repository.setIsActive(!archived && !disabled);
-        return repositoryRepository.save(repository);
+        return repository;
     }
 
     private void validatePage(int page, int perPage) {
