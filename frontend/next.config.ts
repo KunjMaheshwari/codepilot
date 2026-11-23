@@ -11,7 +11,6 @@ const nextConfig: NextConfig = {
     if (!backendUrl) return [];
     return [
       { source: "/api/v1/:path*", destination: `${backendUrl}/api/v1/:path*` },
-      { source: "/oauth2/:path*", destination: `${backendUrl}/oauth2/:path*` },
       { source: "/login/oauth2/:path*", destination: `${backendUrl}/login/oauth2/:path*` },
     ];
   },
