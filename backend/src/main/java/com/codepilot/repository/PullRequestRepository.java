@@ -7,12 +7,14 @@ import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 @Repository
 public interface PullRequestRepository extends JpaRepository<PullRequest, UUID> {
     Page<PullRequest> findByRepositoryId(UUID repositoryId, Pageable pageable);
+    List<PullRequest> findByRepositoryId(UUID repositoryId);
     Optional<PullRequest> findByRepositoryIdAndPrNumber(UUID repositoryId, Integer prNumber);
     Page<PullRequest> findByRepositoryIdAndRepositoryOwnerId(UUID repositoryId, UUID ownerId, Pageable pageable);
     Page<PullRequest> findByRepositoryOwnerId(UUID ownerId, Pageable pageable);

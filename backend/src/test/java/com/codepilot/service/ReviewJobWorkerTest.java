@@ -206,4 +206,66 @@ class ReviewJobWorkerTest {
         long delayMs = worker.computeRetryDelayMillis(1, 25L);
         assertThat(delayMs).isGreaterThanOrEqualTo(25_000L).isLessThanOrEqualTo(60_000L);
     }
+
+    @Test
+    void fallsBackToDatabasePendingJobsWhenRedisIsUnavailable() {
+        UUID jobId = UUID.fromString("00000000-0000-0000-0000-000000000010");
+        Review review = new Review();
+        review.setId(UUID.fromString("00000000-0000-0000-0000-000000000011"));
+        ReviewJob job = new ReviewJob();
+        job.setId(jobId);
+        job.setReview(review);
+        job.setStatus("COMPLETED");
+        job.setAttemptCount(1);
+
+        when(listOperations.rightPopAndLeftPush("queue", "processing"))
+                .thenThrow(new IllegalStateException("Redis connection refused"));
+        when(reviewJobService.findPendingJobs()).thenReturn(java.util.List.of(job));
+        when(reviewJobService.claim(jobId)).thenReturn(true);
+        when(jobRepository.find(jobId)).thenReturn(job);
+
+        worker.poll();
+
+        verify(reviewJobService).claim(jobId);
+        verify(orchestrator).orchestrateReview(job);
+        assertThat(worker.getProcessedCount()).isEqualTo(1);
+    }
+
+    @Test
+    void fallsBackToDatabaseRetryableJobsWhenRedisIsUnavailableAndNoPendingJobs() {
+        UUID jobId = UUID.fromString("00000000-0000-0000-0000-000000000012");
+        Review review = new Review();
+        review.setId(UUID.fromString("00000000-0000-0000-0000-000000000013"));
+        ReviewJob job = new ReviewJob();
+        job.setId(jobId);
+        job.setReview(review);
+        job.setStatus("FAILED");
+        job.setAttemptCount(1);
+        job.setErrorMessage("Transient error");
+
+        when(listOperations.rightPopAndLeftPush("queue", "processing"))
+                .thenThrow(new IllegalStateException("Redis connection refused"));
+        when(reviewJobService.findPendingJobs()).thenReturn(java.util.List.of());
+        when(reviewJobService.findRetryableJobs(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(java.util.List.of(job));
+        when(reviewJobService.claim(jobId)).thenReturn(true);
+        when(jobRepository.find(jobId)).thenReturn(job);
+
+        worker.poll();
+
+        verify(orchestrator).orchestrateReview(job);
+        verify(reviewJobService).markRetrying(job, "Transient error");
+        verify(zSetOperations, never()).add(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(), anyDouble());
+        assertThat(worker.getRetryScheduledCount()).isEqualTo(1);
+    }
+
+    @Test
+    void handlesRedisOutageGracefullyDuringPromoteDueRetries() {
+        when(zSetOperations.rangeByScore(eq("retry"), eq(0.0), anyDouble(), eq(0L), eq(50L)))
+                .thenThrow(new IllegalStateException("Redis unavailable"));
+
+        worker.promoteDueRetries();
+
+        verify(listOperations, never()).leftPush(eq("queue"), org.mockito.ArgumentMatchers.anyString());
+    }
 }

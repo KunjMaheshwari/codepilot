@@ -13,7 +13,7 @@ public class AsyncReviewConfig {
     @Bean
     public TaskScheduler taskScheduler() {
         ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
-        scheduler.setPoolSize(4);
+        scheduler.setPoolSize(6);
         scheduler.setThreadNamePrefix("codepilot-scheduler-");
         scheduler.setWaitForTasksToCompleteOnShutdown(true);
         scheduler.setAwaitTerminationSeconds(20);

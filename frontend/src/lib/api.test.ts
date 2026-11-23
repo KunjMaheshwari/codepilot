@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api, ApiError, apiErrorMessage } from "./api";
+import { api, ApiError, apiErrorMessage, onSessionExpired } from "./api";
 
 describe("api client error handling and CSRF behavior", () => {
   const fetchMock = vi.fn<typeof fetch>();
@@ -57,7 +57,7 @@ describe("api client error handling and CSRF behavior", () => {
 
     await expect(api.syncRepositories()).rejects.toMatchObject({
       status: 403,
-      message: "Your session has expired. Please sign in again.",
+      message: "Access denied or security token expired. Please refresh and try again.",
     });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -99,7 +99,7 @@ describe("api client error handling and CSRF behavior", () => {
     );
   });
 
-  it("maps AbortError to 408 and TypeError to 401 ApiError", async () => {
+  it("maps AbortError to 408 and TypeError to network status 0 ApiError", async () => {
     fetchMock.mockRejectedValueOnce(new DOMException("Aborted", "AbortError"));
     await expect(api.getDashboard()).rejects.toMatchObject({
       status: 408,
@@ -108,9 +108,43 @@ describe("api client error handling and CSRF behavior", () => {
 
     fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
     await expect(api.getDashboard()).rejects.toMatchObject({
-      status: 401,
-      message: "Your session has expired or the API is unreachable. Please sign in again.",
+      status: 0,
+      message: "Unable to reach the CodePilot API. Please check your connection and try again.",
     });
+  });
+
+  it("notifies session-expired listeners on 401 but not on 403 or network errors", async () => {
+    const expiredListener = vi.fn();
+    const unsubscribe = onSessionExpired(expiredListener);
+
+    try {
+      fetchMock.mockResolvedValueOnce(
+        new Response(JSON.stringify({ message: "Forbidden" }), {
+          status: 403,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      await expect(api.getDashboard()).rejects.toMatchObject({ status: 403 });
+      expect(expiredListener).not.toHaveBeenCalled();
+
+      fetchMock.mockRejectedValueOnce(new TypeError("Network failure"));
+      await expect(api.getDashboard()).rejects.toMatchObject({ status: 0 });
+      expect(expiredListener).not.toHaveBeenCalled();
+
+      fetchMock.mockResolvedValueOnce(
+        new Response(JSON.stringify({ message: "Authentication required" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      await expect(api.getReviews()).rejects.toMatchObject({
+        status: 401,
+        message: "Your session has expired. Please sign in again.",
+      });
+      expect(expiredListener).toHaveBeenCalledTimes(1);
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("maps 503 Render hibernation HTML responses to a clear waking-up ApiError", async () => {

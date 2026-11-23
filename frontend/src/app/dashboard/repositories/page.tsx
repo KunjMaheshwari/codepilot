@@ -12,8 +12,10 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { useToast } from "@/components/ui/toast";
 import {
   api,
+  ApiError,
   apiErrorMessage,
   formatDate,
+  githubLoginUrl,
   type PullRequest,
   type Repository,
   type Review,
@@ -34,32 +36,46 @@ export default function RepositoriesPage() {
   const [syncingPrs, setSyncingPrs] = useState(false);
   const [submittingPrId, setSubmittingPrId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
+  const [sessionExpired, setSessionExpired] = useState(false);
   const [repoQuery, setRepoQuery] = useState("");
   const [repoFilter, setRepoFilter] = useState<RepoFilter>("all");
   const [prFilter, setPrFilter] = useState<PrFilter>("all");
+
+  const handleApiError = useCallback((error: unknown) => {
+    if (error instanceof ApiError && error.status === 401) {
+      setSessionExpired(true);
+    }
+    const msg = apiErrorMessage(error);
+    setErrorMessage(msg);
+    return msg;
+  }, []);
 
   const loadRepositories = useCallback(async () => {
     setLoading(true);
     setErrorMessage("");
     try {
       const allRepos = await api.getAllRepositories();
+      setSessionExpired(false);
       setRepositories(allRepos);
     } catch (error: unknown) {
-      setErrorMessage(apiErrorMessage(error));
+      handleApiError(error);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [handleApiError]);
 
   useEffect(() => {
     let cancelled = false;
     api
       .getAllRepositories()
       .then((allRepos) => {
-        if (!cancelled) setRepositories(allRepos);
+        if (!cancelled) {
+          setSessionExpired(false);
+          setRepositories(allRepos);
+        }
       })
       .catch((error: unknown) => {
-        if (!cancelled) setErrorMessage(apiErrorMessage(error));
+        if (!cancelled) handleApiError(error);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -67,7 +83,7 @@ export default function RepositoriesPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [handleApiError]);
 
   const openRepository = (repository: Repository) => {
     setSelected(repository);
@@ -101,8 +117,7 @@ export default function RepositoriesPage() {
         });
       })
       .catch((error: unknown) => {
-        const msg = apiErrorMessage(error);
-        setErrorMessage(msg);
+        const msg = handleApiError(error);
         toast({ title: "Repository sync failed", description: msg, variant: "error" });
       })
       .finally(() => setSyncingRepos(false));
@@ -187,7 +202,17 @@ export default function RepositoriesPage() {
       </div>
 
       {errorMessage && (
-        <ErrorBanner message={errorMessage} onRetry={() => void loadRepositories()} />
+        <ErrorBanner
+          message={errorMessage}
+          onRetry={sessionExpired ? undefined : () => void loadRepositories()}
+          action={
+            sessionExpired ? (
+              <a href={githubLoginUrl}>
+                <Button size="sm">Sign in with GitHub</Button>
+              </a>
+            ) : undefined
+          }
+        />
       )}
 
       {loading ? (

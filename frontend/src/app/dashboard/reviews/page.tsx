@@ -23,8 +23,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
 import {
   api,
+  ApiError,
   apiErrorMessage,
   formatDate,
+  githubLoginUrl,
   type Review,
   type ReviewFinding,
   type ReviewJob,
@@ -80,15 +82,24 @@ export default function ReviewsPage() {
   const [loadingFindingsId, setLoadingFindingsId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [sessionExpired, setSessionExpired] = useState(false);
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all");
   const [query, setQuery] = useState("");
   const [severityFilter, setSeverityFilter] = useState<string>("ALL");
   const [activeFindingIndex, setActiveFindingIndex] = useState(0);
 
+  const handleApiError = useCallback((reason: unknown) => {
+    if (reason instanceof ApiError && reason.status === 401) {
+      setSessionExpired(true);
+    }
+    setError(apiErrorMessage(reason));
+  }, []);
+
   const loadReviews = useCallback(async () => {
     setError("");
     try {
       const page = await api.getReviews(0, 100);
+      setSessionExpired(false);
       setReviews(page.content);
       setSelectedId((current) => {
         if (current && page.content.some((r) => r.id === current)) {
@@ -104,11 +115,11 @@ export default function ReviewsPage() {
         return page.content[0]?.id ?? null;
       });
     } catch (reason: unknown) {
-      setError(apiErrorMessage(reason));
+      handleApiError(reason);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [handleApiError]);
 
   useEffect(() => {
     let cancelled = false;
@@ -116,6 +127,7 @@ export default function ReviewsPage() {
       .getReviews(0, 100)
       .then((page) => {
         if (cancelled) return;
+        setSessionExpired(false);
         setReviews(page.content);
         setSelectedId((current) => {
           if (current && page.content.some((r) => r.id === current)) {
@@ -132,7 +144,7 @@ export default function ReviewsPage() {
         });
       })
       .catch((reason: unknown) => {
-        if (!cancelled) setError(apiErrorMessage(reason));
+        if (!cancelled) handleApiError(reason);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -140,7 +152,7 @@ export default function ReviewsPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [handleApiError]);
 
   const loadFindings = useCallback(async (reviewId: string) => {
     setLoadingFindingsId(reviewId);
@@ -148,14 +160,15 @@ export default function ReviewsPage() {
       const page = await api.getFindings(reviewId, 0, 100);
       setFindingsByReview((current) => ({ ...current, [reviewId]: page.content }));
     } catch (reason: unknown) {
-      setError(apiErrorMessage(reason));
+      handleApiError(reason);
     } finally {
       setLoadingFindingsId((current) => (current === reviewId ? null : current));
     }
-  }, []);
+  }, [handleApiError]);
 
-  // Poll active review jobs every 5s
+  // Poll active review jobs every 5s (pause automatically if session expired)
   useEffect(() => {
+    if (sessionExpired) return;
     const active = reviews.filter((review) =>
       activeStatuses.has(jobs[review.id]?.status ?? review.status),
     );
@@ -174,11 +187,11 @@ export default function ReviewsPage() {
             }
           }),
         ),
-      ).catch((reason: unknown) => setError(apiErrorMessage(reason)));
+      ).catch((reason: unknown) => handleApiError(reason));
     }, 5000);
 
     return () => window.clearInterval(timer);
-  }, [reviews, jobs, loadFindings, loadReviews]);
+  }, [reviews, jobs, sessionExpired, loadFindings, loadReviews, handleApiError]);
 
   const selectedReview = useMemo(
     () => reviews.find((review) => review.id === selectedId) ?? null,
@@ -204,16 +217,16 @@ export default function ReviewsPage() {
         }
       })
       .catch((reason: unknown) => {
-        if (!cancelled) setError(apiErrorMessage(reason));
+        if (!cancelled) handleApiError(reason);
       });
     return () => {
       cancelled = true;
     };
-  }, [selectedReview, selectedStatus, findingsByReview]);
+  }, [selectedReview, selectedStatus, findingsByReview, handleApiError]);
 
   // Load job metadata (attempt count, error category, sanitized error message) for the selected review
   useEffect(() => {
-    if (!selectedReview || jobs[selectedReview.id]) return;
+    if (!selectedReview || jobs[selectedReview.id] || sessionExpired) return;
     let cancelled = false;
     api
       .getJob(selectedReview.id)
@@ -222,13 +235,16 @@ export default function ReviewsPage() {
           setJobs((current) => ({ ...current, [selectedReview.id]: job }));
         }
       })
-      .catch(() => {
-        // Non-fatal: some legacy or partial records may not expose a ReviewJob
+      .catch((reason: unknown) => {
+        if (!cancelled && reason instanceof ApiError && reason.status === 401) {
+          handleApiError(reason);
+        }
+        // Non-fatal otherwise: some legacy or partial records may not expose a ReviewJob
       });
     return () => {
       cancelled = true;
     };
-  }, [selectedReview, jobs]);
+  }, [selectedReview, jobs, sessionExpired, handleApiError]);
 
   const filteredReviews = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -301,7 +317,19 @@ export default function ReviewsPage() {
         </Button>
       </div>
 
-      {error && <ErrorBanner message={error} onRetry={() => void loadReviews()} />}
+      {error && (
+        <ErrorBanner
+          message={error}
+          onRetry={sessionExpired ? undefined : () => void loadReviews()}
+          action={
+            sessionExpired ? (
+              <a href={githubLoginUrl}>
+                <Button size="sm">Sign in with GitHub</Button>
+              </a>
+            ) : undefined
+          }
+        />
+      )}
 
       {loading ? (
         <div className="grid gap-5 lg:grid-cols-12">

@@ -22,11 +22,12 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 import static org.mockito.ArgumentMatchers.any;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @ExtendWith(MockitoExtension.class)
 class GitHubIntegrationServiceTest {
@@ -200,11 +201,9 @@ class GitHubIntegrationServiceTest {
                         "archived", true,
                         "default_branch", "main",
                         "html_url", "https://github.com/owner/archived-repo")));
-        when(repositoryRepository.findByGithubRepoIdAndOwnerId("42", testUser.getId()))
-                .thenReturn(Optional.empty());
-        when(repositoryRepository.findByOwnerIdAndIsActiveTrue(testUser.getId()))
+        when(repositoryRepository.findByOwnerId(testUser.getId()))
                 .thenReturn(List.of(removed));
-        when(repositoryRepository.save(any(Repository.class)))
+        when(repositoryRepository.saveAll(anyList()))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
         List<Repository> result = gitHubIntegrationService.synchronizeAllRepositories(testUser);
@@ -213,6 +212,9 @@ class GitHubIntegrationServiceTest {
             assertThat(repo.getGithubRepoId()).isEqualTo("42");
             assertThat(repo.getIsActive()).isFalse();
         });
+        assertThat(removed.getIsActive()).isFalse();
+        verify(repositoryRepository, never()).findByGithubRepoIdAndOwnerId(anyString(), any());
+        verify(repositoryRepository).saveAll(anyList());
     }
 
     @Test
@@ -244,9 +246,9 @@ class GitHubIntegrationServiceTest {
         when(gitHubApiClient.getUserRepositoriesPageByUrl("decrypted-token", "https://api.github.test/user/repos?page=3"))
                 .thenReturn(new GitHubApiClient.GitHubPagedResponse<>(page3, null));
 
-        when(repositoryRepository.findByGithubRepoIdAndOwnerId(anyString(), any()))
-                .thenReturn(Optional.empty());
-        when(repositoryRepository.save(any(Repository.class)))
+        when(repositoryRepository.findByOwnerId(testUser.getId()))
+                .thenReturn(List.of());
+        when(repositoryRepository.saveAll(anyList()))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
         List<Repository> result = gitHubIntegrationService.synchronizeAllRepositories(testUser);
@@ -254,6 +256,8 @@ class GitHubIntegrationServiceTest {
         assertThat(result).hasSize(255);
         assertThat(result.get(0).getName()).isEqualTo("repo-1");
         assertThat(result.get(254).getName()).isEqualTo("repo-255");
+        verify(repositoryRepository, never()).findByGithubRepoIdAndOwnerId(anyString(), any());
+        verify(repositoryRepository).saveAll(anyList());
     }
 
     @Test
@@ -276,9 +280,9 @@ class GitHubIntegrationServiceTest {
         when(gitHubApiClient.getUserRepositoriesPageByUrl("decrypted-token", "https://api.github.test/user/repos?page=2"))
                 .thenReturn(new GitHubApiClient.GitHubPagedResponse<>(page2, null));
 
-        when(repositoryRepository.findByGithubRepoIdAndOwnerId(anyString(), any()))
-                .thenReturn(Optional.empty());
-        when(repositoryRepository.save(any(Repository.class)))
+        when(repositoryRepository.findByOwnerId(testUser.getId()))
+                .thenReturn(List.of());
+        when(repositoryRepository.saveAll(anyList()))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
         List<Repository> result = gitHubIntegrationService.synchronizeAllRepositories(testUser);
@@ -304,9 +308,9 @@ class GitHubIntegrationServiceTest {
         when(gitHubApiClient.getUserRepositoriesPageByUrl("decrypted-token", "https://api.github.test/user/repos?page=2"))
                 .thenReturn(new GitHubApiClient.GitHubPagedResponse<>(List.of(), null));
 
-        when(repositoryRepository.findByGithubRepoIdAndOwnerId(anyString(), any()))
-                .thenReturn(Optional.empty());
-        when(repositoryRepository.save(any(Repository.class)))
+        when(repositoryRepository.findByOwnerId(testUser.getId()))
+                .thenReturn(List.of());
+        when(repositoryRepository.saveAll(anyList()))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
         List<Repository> result = gitHubIntegrationService.synchronizeAllRepositories(testUser);
@@ -332,9 +336,9 @@ class GitHubIntegrationServiceTest {
                 .thenReturn(new GitHubApiClient.GitHubPagedResponse<>(List.of(
                         Map.of("id", 888, "name", "tenant-repo", "full_name", "other/tenant-repo", "private", false)), null));
 
-        when(repositoryRepository.findByGithubRepoIdAndOwnerId("888", otherUser.getId()))
-                .thenReturn(Optional.empty());
-        when(repositoryRepository.save(any(Repository.class)))
+        when(repositoryRepository.findByOwnerId(otherUser.getId()))
+                .thenReturn(List.of());
+        when(repositoryRepository.saveAll(anyList()))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
         List<Repository> result = gitHubIntegrationService.synchronizeAllRepositories(otherUser);
@@ -347,6 +351,11 @@ class GitHubIntegrationServiceTest {
 
     @Test
     void synchronizeAllRepositories_NetworkFailureDuringPaginationThrowsAndDoesNotMarkMissingInactive() {
+        Repository existing = new Repository();
+        existing.setId(UUID.randomUUID());
+        existing.setGithubRepoId("999");
+        existing.setIsActive(true);
+
         when(connectedGitHubAccountRepository.findByUserId(testUser.getId()))
                 .thenReturn(Optional.of(connectedAccount));
         when(encryptionService.decrypt("test-token")).thenReturn("decrypted-token");
@@ -354,10 +363,8 @@ class GitHubIntegrationServiceTest {
         List<Map<String, Object>> page1 = List.of(
                 Map.of("id", 1, "name", "repo-1", "full_name", "owner/repo-1", "private", false));
 
-        when(repositoryRepository.findByGithubRepoIdAndOwnerId("1", testUser.getId()))
-                .thenReturn(Optional.empty());
-        when(repositoryRepository.save(any(Repository.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(repositoryRepository.findByOwnerId(testUser.getId()))
+                .thenReturn(List.of(existing));
 
         when(gitHubApiClient.getUserRepositoriesPage("decrypted-token", 1, 100))
                 .thenReturn(new GitHubApiClient.GitHubPagedResponse<>(page1, "https://api.github.test/user/repos?page=2"));
@@ -367,6 +374,8 @@ class GitHubIntegrationServiceTest {
         assertThatThrownBy(() -> gitHubIntegrationService.synchronizeAllRepositories(testUser))
                 .isInstanceOf(com.codepilot.exception.GitHubApiException.class)
                 .hasMessage("GitHub API is unavailable");
+        assertThat(existing.getIsActive()).isTrue();
+        verify(repositoryRepository, never()).saveAll(anyList());
     }
 
     @Test
@@ -383,9 +392,9 @@ class GitHubIntegrationServiceTest {
                         "user", Map.of("login", "author"),
                         "base", Map.of("ref", "main", "sha", "base-sha"),
                         "head", Map.of("ref", "feat", "sha", "head-sha"))));
-        when(pullRequestRepository.findByRepositoryIdAndPrNumber(testRepository.getId(), 12))
-                .thenReturn(Optional.empty());
-        when(pullRequestRepository.save(any(PullRequest.class)))
+        when(pullRequestRepository.findByRepositoryId(testRepository.getId()))
+                .thenReturn(List.of());
+        when(pullRequestRepository.saveAll(anyList()))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(repositoryRepository.save(any(Repository.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
@@ -396,5 +405,7 @@ class GitHubIntegrationServiceTest {
             assertThat(pr.getPrNumber()).isEqualTo(12);
             assertThat(pr.getStatus()).isEqualTo("merged");
         });
+        verify(pullRequestRepository, never()).findByRepositoryIdAndPrNumber(any(), anyInt());
+        verify(pullRequestRepository).saveAll(anyList());
     }
 }

@@ -25,6 +25,15 @@ public interface ReviewJobRepository extends JpaRepository<ReviewJob, UUID> {
         order by j.updatedAt asc
         """)
     List<ReviewJob> findStaleQueuedJobs(@Param("cutoff") ZonedDateTime cutoff);
+
+    @EntityGraph(attributePaths = {"review", "review.pullRequest", "review.pullRequest.repository"})
+    @Query("""
+        select j from ReviewJob j
+        where j.status = 'RETRYING'
+          and j.updatedAt < :cutoff
+        order by j.updatedAt asc
+        """)
+    List<ReviewJob> findRetryableJobs(@Param("cutoff") ZonedDateTime cutoff);
     java.util.Optional<ReviewJob> findByReviewId(UUID reviewId);
 
     @EntityGraph(attributePaths = {"review", "review.pullRequest", "review.pullRequest.repository",

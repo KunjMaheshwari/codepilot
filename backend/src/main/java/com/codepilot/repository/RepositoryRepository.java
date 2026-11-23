@@ -13,6 +13,7 @@ import java.util.UUID;
 @org.springframework.stereotype.Repository
 public interface RepositoryRepository extends JpaRepository<Repository, UUID> {
     Page<Repository> findByOwnerId(UUID ownerId, Pageable pageable);
+    List<Repository> findByOwnerId(UUID ownerId);
     List<Repository> findByOwnerIdAndIsActiveTrue(UUID ownerId);
     Optional<Repository> findByIdAndOwnerId(UUID id, UUID ownerId);
     Optional<Repository> findByGithubRepoId(String githubRepoId);

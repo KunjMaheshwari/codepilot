@@ -16,7 +16,7 @@ import {
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Sidebar } from "./sidebar";
-import { api, githubLoginUrl, type UserProfile } from "@/lib/api";
+import { api, githubLoginUrl, onSessionExpired, type UserProfile } from "@/lib/api";
 
 const routeTitles: Array<{ prefix: string; title: string }> = [
   { prefix: "/dashboard/repositories", title: "Repositories & Pull Requests" },
@@ -34,6 +34,12 @@ export function Header() {
 
   useEffect(() => {
     let cancelled = false;
+    const unsubscribe = onSessionExpired(() => {
+      if (!cancelled) {
+        setUser(null);
+        setAuthChecked(true);
+      }
+    });
     api
       .getMe()
       .then((profile) => {
@@ -47,6 +53,7 @@ export function Header() {
       });
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, []);
 

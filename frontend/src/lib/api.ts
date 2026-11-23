@@ -105,9 +105,33 @@ export interface UserProfile {
   createdAt?: string;
 }
 
-type RequestOptions = Omit<RequestInit, "body"> & { body?: unknown };
+type RequestOptions = Omit<RequestInit, "body"> & {
+  body?: unknown;
+  timeoutMs?: number;
+};
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS", "TRACE"]);
+const DEFAULT_TIMEOUT_MS = 15000;
+const SYNC_TIMEOUT_MS = 60000;
+
+const sessionExpiredListeners = new Set<() => void>();
+
+export function onSessionExpired(listener: () => void): () => void {
+  sessionExpiredListeners.add(listener);
+  return () => {
+    sessionExpiredListeners.delete(listener);
+  };
+}
+
+function notifySessionExpired() {
+  for (const listener of sessionExpiredListeners) {
+    try {
+      listener();
+    } catch {
+      // Never let a UI listener break API error propagation.
+    }
+  }
+}
 
 function readCookie(name: string): string | undefined {
   if (typeof document === "undefined") return undefined;
@@ -139,23 +163,24 @@ async function ensureCsrfToken(): Promise<string | undefined> {
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, body, ...fetchOptions } = options;
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 15000);
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const method = (options.method ?? "GET").toUpperCase();
+    const method = (fetchOptions.method ?? "GET").toUpperCase();
     const csrfToken = SAFE_METHODS.has(method) ? undefined : await ensureCsrfToken();
 
     const response = await fetch(`${API_BASE_URL}${path}`, {
-      ...options,
+      ...fetchOptions,
       method,
       credentials: "include",
       headers: {
         Accept: "application/json",
-        ...(options.body === undefined ? {} : { "Content-Type": "application/json" }),
+        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
         ...(csrfToken ? { "X-XSRF-TOKEN": csrfToken } : {}),
-        ...options.headers,
+        ...fetchOptions.headers,
       },
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      body: body === undefined ? undefined : JSON.stringify(body),
       signal: controller.signal,
     });
 
@@ -169,15 +194,26 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       ) {
         throw new ApiError("Backend service is waking up. Please retry in a few seconds.", 503);
       }
+      let backendMessage: string | undefined;
       try {
         const error = (await response.json()) as { message?: string };
-        message = error.message ?? message;
+        if (error.message && error.message.trim().length > 0) {
+          backendMessage = error.message;
+          message = error.message;
+        }
       } catch {
         // Keep the status-based message for non-JSON responses.
       }
-      if (response.status === 401 || response.status === 403) {
+      if (response.status === 401) {
         cachedCsrfToken = undefined;
+        notifySessionExpired();
         message = "Your session has expired. Please sign in again.";
+      } else if (response.status === 403) {
+        cachedCsrfToken = undefined;
+        message =
+          backendMessage && backendMessage.toLowerCase() !== "forbidden"
+            ? backendMessage
+            : "Access denied or security token expired. Please refresh and try again.";
       }
       throw new ApiError(message, response.status);
     }
@@ -188,7 +224,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       throw new ApiError("The request timed out. Please try again.", 408);
     }
     if (error instanceof TypeError) {
-      throw new ApiError("Your session has expired or the API is unreachable. Please sign in again.", 401);
+      throw new ApiError("Unable to reach the CodePilot API. Please check your connection and try again.", 0);
     }
     throw error;
   } finally {
@@ -220,7 +256,10 @@ export const api = {
     return Array.from(byId.values());
   },
   syncRepositories: () =>
-    request<Page<Repository>>("/api/v1/repositories/sync", { method: "POST" }),
+    request<Page<Repository>>("/api/v1/repositories/sync", {
+      method: "POST",
+      timeoutMs: SYNC_TIMEOUT_MS,
+    }),
   getPullRequests: (repositoryId: string, page = 0, size = 20) =>
     request<Page<PullRequest>>(
       `/api/v1/repositories/${repositoryId}/pull-requests?page=${page}&size=${size}`,
@@ -228,7 +267,7 @@ export const api = {
   syncPullRequests: (repositoryId: string, page = 0, size = 20) =>
     request<Page<PullRequest>>(
       `/api/v1/repositories/${repositoryId}/pull-requests/sync?page=${page}&size=${size}`,
-      { method: "POST" },
+      { method: "POST", timeoutMs: SYNC_TIMEOUT_MS },
     ),
   getReviews: (page = 0, size = 20) =>
     request<Page<Review>>(`/api/v1/reviews?page=${page}&size=${size}`),
