@@ -37,6 +37,44 @@ class DiffParserTest {
     }
 
     @Test
+    void mapsChangedLinesAcrossHunksInCrLfPatch() {
+        String diff = """
+                diff --git a/src/Example.java b/src/Example.java
+                --- a/src/Example.java
+                +++ b/src/Example.java
+                @@ -10,3 +10,4 @@
+                 firstContext();
+                -previousValue();
+                +newValue();
+                +recordValue();
+                 lastContext();
+                @@ -30,2 +31,2 @@
+                -previousTail();
+                +newTail();
+                 finish();
+                """.replace("\n", "\r\n");
+
+        assertThat(parser.parseDiff(diff)).singleElement().satisfies(file -> {
+            assertThat(file.getOldFilePath()).isEqualTo("src/Example.java");
+            assertThat(file.getFilePath()).isEqualTo("src/Example.java");
+            assertThat(file.getHunks()).containsExactly("@@ -10,3 +10,4 @@", "@@ -30,2 +31,2 @@");
+            assertThat(file.getAddedLines()).containsExactly(11, 12, 31);
+            assertThat(file.getRemovedLines()).containsExactly(11, 30);
+            assertThat(file.getChangedLineRanges()).containsExactly(
+                    new DiffParser.LineRange(10, 10, false, false),
+                    new DiffParser.LineRange(11, null, false, true),
+                    new DiffParser.LineRange(null, 11, true, false),
+                    new DiffParser.LineRange(null, 12, true, false),
+                    new DiffParser.LineRange(12, 13, false, false),
+                    new DiffParser.LineRange(30, null, false, true),
+                    new DiffParser.LineRange(null, 31, true, false),
+                    new DiffParser.LineRange(31, 32, false, false));
+            assertThat(file.isIncomplete()).isFalse();
+            assertThat(file.isReviewable()).isTrue();
+        });
+    }
+
+    @Test
     void marksBinaryAndIncompleteFilesAsNotReviewable() {
         String diff = """
                 diff --git a/image.png b/image.png
